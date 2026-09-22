@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neuroplex"
+version = "0.1.0"
+description = "A tiny artificial life laboratory with a continuously learning spiking brain"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.0,<3", "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "websockets>=13,<18"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
+
+[project.scripts]
+neuroplex = "neuroplex.__main__:main"
+
+[tool.setuptools.package-data]
+neuroplex = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

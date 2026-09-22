@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Neuroplex (separate debug world)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "neuroplex",
+      "args": ["--port", "8001", "--data-dir", "data/debug"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1" }
+    }
+  ]
+}
