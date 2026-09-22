@@ -1,6 +1,7 @@
 """Small, explicit defaults for a CPU-only OptiPlex. Time is in seconds."""
 
 from dataclasses import asdict, dataclass
+import math
 
 
 @dataclass(frozen=True)
@@ -37,17 +38,52 @@ class Config:
     shaping_scale: float = 4.0
     eating_reward: float = 6.0
     pretrained_policy: bool = True
+    memory_enabled: bool = True
+    memory_seconds: float = 10.0
+    curriculum_enabled: bool = True
+    habitat_stage: int = 0
+    stage_seconds: float = 180.0
+    water_enabled: bool = True
+    water_count: int = 12
+    water_radius: float = 1.7
+    max_hydration: float = 100.0
+    water_cost: float = 0.35
+    movement_water_cost: float = 0.035
+    drinking_rate: float = 24.0
+    drinking_reward: float = 6.0
+    predator_count: int = 2
+    predator_speed: float = 4.0
+    predator_radius: float = 1.3
+    predator_detection: float = 18.0
+    predator_damage: float = 15.0
+    predator_cooldown: float = 5.0
+    max_health: float = 100.0
+    healing_rate: float = 0.7
 
     def __post_init__(self):
         if self.neurons != 500 or not 1 <= self.fan_out < 420:
             raise ValueError("v1 uses the documented 500-neuron layout; fan_out must be 1..419")
+        booleans = {"pretrained_policy", "memory_enabled", "curriculum_enabled", "water_enabled"}
+        nonnegative = {"seed", "food_count", "shaping_scale", "exploration_floor", "habitat_stage",
+                       "water_count", "predator_count"}
         for name, value in asdict(self).items():
-            if name not in ("seed", "food_count", "pretrained_policy", "shaping_scale", "exploration_floor") and value <= 0:
+            if name in booleans:
+                if type(value) is not bool:
+                    raise ValueError(f"{name} must be boolean")
+                continue
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            if name not in nonnegative and value <= 0:
                 raise ValueError(f"{name} must be positive")
         if self.shaping_scale < 0 or type(self.pretrained_policy) is not bool:
             raise ValueError("shaping_scale must be nonnegative and pretrained_policy must be boolean")
         if self.food_count < 0:
             raise ValueError("food_count must be non-negative")
+        for name in ("seed", "food_count", "water_count", "predator_count", "habitat_stage"):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        if not 0 <= self.habitat_stage <= 4 or self.predator_count > 8:
+            raise ValueError("habitat stage must be 0..4; at most 8 predators")
         if abs(round(self.world_dt / self.brain_dt) * self.brain_dt - self.world_dt) > 1e-9:
             raise ValueError("world_dt must be a multiple of brain_dt")
         if min(self.world_width, self.world_height) <= 8 * self.creature_radius:
@@ -63,7 +99,7 @@ class Config:
 GROUPS = [
     ("Vision", 0, 32),
     ("Hunger", 32, 48),
-    ("Reserved", 48, 64),
+    ("Thirst", 48, 64),
     ("Touch", 64, 80),
     ("Association", 80, 400),
     ("Forward", 400, 425),

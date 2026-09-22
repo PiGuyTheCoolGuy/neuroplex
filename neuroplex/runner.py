@@ -2,6 +2,9 @@
 
 import fcntl
 import logging
+from logging.handlers import RotatingFileHandler
+from dataclasses import replace
+import json
 import os
 import shutil
 from pathlib import Path
@@ -10,12 +13,14 @@ import time
 
 from .config import Config
 from .simulation import Simulation
+from .lab import Laboratory
+from .experiments import GENES, copy_model
 
 log = logging.getLogger(__name__)
 
 
 class Runner:
-    def __init__(self, directory: Path, seed: int = 7, untrained: bool = False):
+    def __init__(self, directory: Path, seed: int = 7, untrained: bool = False, stage: int = 0):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.file_lock = (self.directory / "process.lock").open("a")
@@ -27,10 +32,10 @@ class Runner:
         self.checkpoint = self.directory / "checkpoint.npz"
         try:
             self.sim = (Simulation.load(self.checkpoint) if self.checkpoint.exists()
-                        else Simulation(Config(seed=seed, pretrained_policy=not untrained)))
-            if self.sim.migrated_from == 1:
+                        else Simulation(Config(seed=seed, pretrained_policy=not untrained, habitat_stage=stage)))
+            if self.sim.migrated_from is not None:
                 # One permanent original survives ordinary autosave rotation.
-                backup = self.directory / "checkpoint.v1.npz"
+                backup = self.directory / f"checkpoint.v{self.sim.migrated_from}.npz"
                 if not backup.exists():
                     temporary = backup.with_suffix(".tmp")
                     with self.checkpoint.open("rb") as source, temporary.open("wb") as destination:
@@ -39,7 +44,12 @@ class Runner:
                         os.fsync(destination.fileno())
                     os.replace(temporary, backup)
                 self.sim.save(self.checkpoint)
-                log.info("Migrated v0.1 checkpoint; original retained at %s", backup)
+                log.info("Migrated checkpoint; original retained at %s", backup)
+            self.lab = Laboratory(self.directory)
+            self.metric_log = RotatingFileHandler(self.directory / "metrics.jsonl", maxBytes=5_000_000,
+                                                  backupCount=3, encoding="utf-8")
+            self.metric_log.setFormatter(logging.Formatter("%(message)s"))
+            self.last_metric = self.sim.metric_sequence
         except Exception:
             self.file_lock.close()
             raise
@@ -49,6 +59,51 @@ class Runner:
         self.error = None
         self.actual_speed = 0.0
         self.tick_ms = 0.0
+        self._life_timer_key = None
+        self._life_remaining = None
+        self._life_clock = time.monotonic()
+        self._life_counting = False
+        self._stream_cache = {}
+        self._chart_revision = None
+        self._history_revision = None
+        self.update_auto_life(allow_restart=False)
+
+    def update_auto_life(self, now=None, *, allow_restart=True):
+        """Called under lock. Wall time only; pause freezes, disable cancels.
+
+        Nothing in Simulation.tick() respawns, so evaluation episodes still end
+        at death. Restarting the service starts a fresh delay, not offline time.
+        """
+        now = time.monotonic() if now is None else now
+        sim = self.sim
+        if sim.world.alive or not sim.auto_life:
+            self._life_timer_key, self._life_remaining = None, None
+            self._life_counting = False
+        else:
+            key = (sim.life, sim.auto_life_delay)
+            if self._life_timer_key != key:
+                self._life_timer_key = key
+                self._life_remaining = float(sim.auto_life_delay)
+            elif self._life_counting:
+                self._life_remaining = max(0.0, self._life_remaining - max(0.0, now - self._life_clock))
+            self._life_counting = not sim.paused and not self.error
+            if allow_restart and self._life_counting and self._life_remaining <= 0:
+                # Retain the completed life's final learning in the backup too.
+                sim.save(self.checkpoint)
+                sim.new_life()
+                sim.event("Automatic next life: learned weights and skills retained.")
+                sim.save(self.checkpoint)
+                self._life_timer_key, self._life_remaining = None, None
+                self._life_counting = False
+        self._life_clock = now
+
+    def auto_life_status(self, now=None):
+        now = time.monotonic() if now is None else now
+        remaining = self._life_remaining
+        if remaining is not None and self._life_counting and not self.error:
+            remaining = max(0.0, remaining - max(0.0, now - self._life_clock))
+        return {"remaining": remaining, "waiting": self._life_timer_key is not None,
+                "paused": bool(self.sim.paused or self.error)}
 
     def start(self):
         self.thread = threading.Thread(target=self._run, name="neuroplex-simulation", daemon=True)
@@ -71,10 +126,28 @@ class Runner:
                         before = self.sim.ticks
                         tick_start = time.monotonic()
                         self.sim.tick()
+                        if self.sim.metric_sequence != self.last_metric:
+                            self.metric_log.emit(logging.LogRecord("neuroplex.metrics", logging.INFO, "", 0,
+                                                                  json.dumps(self.sim.metrics[-1]), (), None))
+                            self.last_metric = self.sim.metric_sequence
                         if self.sim.ticks != before:
                             self.tick_ms = self.tick_ms * 0.9 + (time.monotonic() - tick_start) * 100
                             measured_steps += 1
                 now = time.monotonic()
+                with self.lock:
+                    self.update_auto_life(now)
+                    self.lab.refresh()
+                    if (self.sim.auto_evaluate and self.sim.elapsed >= self.sim.next_evaluation
+                            and not self.lab.running() and not self.sim.paused):
+                        self.sim.next_evaluation = self.sim.elapsed + 1800
+                        try:
+                            self.lab.start(self.sim, {"kind": "evaluate", "stage": self.sim.world.stage,
+                                                     "seed": (self.sim.config.seed + self.sim.metric_sequence) % 2**32,
+                                                     "seconds": 60.0, "trials": 2})
+                            self.sim.event("Started a frozen evaluation of a copy on two new worlds.")
+                        except (OSError, ValueError) as exc:
+                            log.exception("Could not launch evaluation")
+                            self.sim.event(f"Evaluation could not start: {exc}")
                 if now - measured_at >= 1:
                     self.actual_speed = measured_steps * self.sim.config.world_dt / (now - measured_at)
                     measured_at, measured_steps = now, 0
@@ -87,18 +160,78 @@ class Runner:
             log.exception("Simulation stopped after an error")
             self.error = f"{type(exc).__name__}: {exc}"
 
-    def snapshot(self):
+    def snapshot(self, include_charts=True):
         with self.lock:
-            state = self.sim.snapshot()
+            state = self.sim.snapshot(include_charts=include_charts)
+            state["stream_time"] = time.monotonic()
+            state["auto_life_status"] = self.auto_life_status(state["stream_time"])
             state["runtime"] = {"actual_speed": self.actual_speed, "tick_ms": self.tick_ms,
                                 "error": self.error}
+            state["lab"] = self.lab.snapshot()
             return state
+
+    def stream_messages(self, seen):
+        """Latest-only, serialized-once caches shared by all browser clients.
+
+        No per-client queue/backlog: slow clients skip old frames. Chart arrays
+        travel only when changed, at most once a second, not with every frame.
+        Nothing is built if no browser is asking for updates.
+        """
+        with self.lock:
+            now = time.monotonic()
+            for kind, interval in (("frame", .05), ("telemetry", .2), ("history", 1.0), ("charts", 1.0)):
+                previous = self._stream_cache.get(kind)
+                # Shared time buckets avoid halving the frame rate when a
+                # client's next poll arrives a fraction of a millisecond early.
+                if previous and int(now / interval) == int(previous[0] / interval):
+                    continue
+                if kind == "frame":
+                    packet = {"world": self.sim.world.render_state(), "life": self.sim.life,
+                              "paused": self.sim.paused, "speed": self.sim.speed,
+                              "auto_life": self.sim.auto_life, "auto_life_delay": self.sim.auto_life_delay,
+                              "auto_life_status": self.auto_life_status(now)}
+                elif kind == "telemetry":
+                    packet = self.snapshot(include_charts=False)
+                elif kind == "history":
+                    revision = (self.sim.life, self.sim.ticks // round(1 / self.sim.config.world_dt),
+                                self.sim.world.alive)
+                    if revision == self._history_revision:
+                        continue
+                    self._history_revision = revision
+                    packet = {"history": list(self.sim.history)}
+                else:
+                    revision = (self.sim.life, self.sim.metric_sequence)
+                    if revision == self._chart_revision:
+                        continue
+                    self._chart_revision = revision
+                    packet = self.sim.chart_snapshot()
+                    packet.pop("history")
+                packet.update(kind=kind, stream_time=now)
+                self._stream_cache[kind] = (now, json.dumps(packet, separators=(",", ":"), allow_nan=False))
+            return [(kind, stamp, payload) for kind, (stamp, payload) in self._stream_cache.items()
+                    if stamp > seen.get(kind, -1)]
+
+    def adopt_champion(self):
+        if self.sim.world.alive:
+            raise ValueError("A champion can start a new life only after the current creature has died")
+        champion = Simulation.load(self.lab.champion())
+        self.sim.save(self.directory / f"checkpoint.before-evolution-life-{self.sim.life}.npz")
+        self.sim.new_life()
+        genes = {name: getattr(champion.config, name) for name in GENES}
+        self.sim.config = replace(self.sim.config, **genes)
+        self.sim.brain.config = self.sim.brain.policy.config = self.sim.memory.config = self.sim.config
+        self.sim.world.config = replace(self.sim.world.config, **genes)
+        copy_model(champion, self.sim)
+        self.sim.event("An evolved descendant began a new life; the previous checkpoint was archived.")
+        self.sim.save(self.checkpoint)
 
     def close(self):
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join()
         try:
+            self.lab.close()
+            self.metric_log.close()
             # Do not replace a known-good checkpoint with potentially bad state.
             if not self.error:
                 with self.lock:

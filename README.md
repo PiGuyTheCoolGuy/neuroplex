@@ -1,43 +1,124 @@
 # Neuroplex
 
-**One creature, one spiking brain, one goal: eat to stay alive.**
+**One creature learning to find food, drink water, and survive predators.**
 
-Neuroplex v0.2 is a CPU-only artificial-life experiment for Ubuntu 24.04. A Python
+Neuroplex v0.3.1 is a CPU-only artificial-life experiment for Ubuntu 24.04. A Python
 process runs the world continuously; your laptop's browser displays it. Closing the
 browser does not stop the simulation. There is no GPU, cloud model, PyTorch, Node.js
 build, or paid API to configure.
 
 The brain has **500 leaky integrate-and-fire neurons and 16,000 sparse synapses**,
-plus a **918-value TD motor policy** that learns which movement helps in each visual
-context. This is a hybrid: action values choose motor intent, and spiking neurons
-produce movement. Recurrent STDP and motor learning both continue during its life.
-There is no backpropagation, action teacher, replay buffer, or automatic life reset.
+plus **3,078 learned values**: three motor skill tables and a goal-choice table.
+This is a hybrid: learned values choose food, water, or escape and a motor intent;
+spiking neurons produce movement. Recurrent STDP and value learning continue during its life.
+There is no backpropagation, action teacher, or replay buffer. After death, the live
+habitat can automatically start a fresh body while retaining the learned brain.
 
-**It now starts with learned food-seeking values**, obtained from ten simulated
-minutes of continuous training. Food rewards, progress feedback, action-specific
-credit, and decreasing exploration replace the old undirected learning behavior.
+**It still starts with the v0.2 learned food-seeking values**, obtained from ten
+simulated minutes of training. Water navigation transfers that motor experience;
+balancing needs and escaping predators are new learning problems. Predators use
+programmed hunting rules. Working memory is an engineered, fading sensory trace,
+not a demonstrated emergent neural memory system.
 Use `--untrained` in a new data directory to watch learning from zero. Controlled
 tests freeze all weights and disable progress rewards in unfamiliar worlds;
 [validation](docs/VALIDATION.md) records results and limits.
 
-## Upgrading from v0.1
+## Upgrading from v0.1, v0.2, or v0.3
 
 Run this in your Ubuntu / VS Code SSH terminal:
 
 ```bash
-cd ~/neuroplex
-systemctl --user stop neuroplex
-git pull --ff-only
-bash setup.sh
+cd ~/neuroplex &&
+systemctl --user stop neuroplex &&
+git pull --ff-only &&
+bash setup.sh &&
 systemctl --user start neuroplex
 ```
 
 If running in the foreground, use Ctrl+C before updating, then `bash start.sh`.
-Refresh the browser. Your existing world and recurrent weights are preserved;
-the learned motor policy is added automatically. The original checkpoint is kept
-as `data/checkpoint.v1.npz` for rollback. If the creature was already dead, click
-**Start new life · keep memory**. A saved pause or learning-freeze setting is also
-preserved, so press Resume / Learning on if needed.
+Refresh the browser (Ctrl+F5). Your world, food experience, recurrent weights, and pause /
+learning settings are preserved. When upgrading a v1/v2 save, the original is retained as
+`data/checkpoint.v1.npz` or `data/checkpoint.v2.npz`. Difficulty starts at the food
+stage and waits for a fresh performance window before advancing. Existing v3 saves
+keep their habitat stage. **Auto-start next life is on by default, with a 10-real-second
+delay**, including older saves with no setting yet. A saved pause holds that countdown;
+press Resume to continue. A saved learning-freeze setting also stays frozen until
+you turn learning back on. Neither update nor respawn discards learned weights.
+
+The packaging fix explicitly excludes runtime `data/` from package discovery;
+you never need to remove saves to run setup. If you manually applied that fix,
+Git may ask you to commit or stash the edit before pulling. Keep your changes.
+
+## What is new
+
+| Feature | Behavior |
+| --- | --- |
+| Automatic next life | On by default; 10 real seconds after death, adjustable 1–300; keeps learned synapses, skill/goal values, difficulty, and lifetime records |
+| Smooth live view | 20 Hz geometry stream, browser animation targeting 60 fps, 100 ms interpolation buffer; no video encoder or extra dependencies |
+| Learning history | Five-second samples; six simulated hours of food/drink rates, energy, hydration, health, reward and learning updates; CSV export |
+| Curriculum | Foraging → scarce food → water → one predator → two predators and shorter vision |
+| Sensory memory | Remembers estimated food/water direction for 10 seconds, integrates body motion, expires; can be disabled |
+| Water | Drinks on contact; moving and living consume hydration; dehydration can end a life |
+| Predators | Scripted roaming and hunting, limited speed and sensing range, damage, cooldowns, health and recovery |
+| Frozen evaluation | New worlds, frozen learned weights, no shaping reward; manual or every 30 simulated minutes |
+| Evolution | Sequential population, inherited learned weights, bounded mutations, unchanged elite, held-out selection and a separate final audit |
+
+The main habitat still contains **one learning creature**. Evolution runs copies
+in separate worlds, one at a time. Predators are NPCs, not an evolving second species.
+There is no mating or uncontrolled population growth in the live habitat.
+
+Start at **1×** on the OptiPlex. In **Habitat curriculum**, leave *Advance when ready*
+on for gradual introduction, or select a stage manually. Each stage needs at least
+three simulated minutes, then a full healthy one-minute performance window.
+For water stages, it must also have visited water during that window. Freezing
+learning pauses automatic advancement. Higher difficulty does not refill its needs.
+
+Use **Evaluation & evolution** to test a snapshot. Choose the stage, duration and
+seed, then run. The default small jobs are quick checks; use **180–300 seconds per
+world** when judging thirst and predator survival. Compare matching stages and
+durations, not raw results from different difficulties. A short perfect trial is
+not proof of long-term skill. Jobs can be cancelled; the main creature keeps running.
+
+For evolution, start with population 4 and 3 generations. The seconds field is the
+training time for each mutated descendant; the separate selection/audit field sets
+the frozen trial length. This can take several minutes on an older CPU. The result
+compares the evolved winner and starting model on the same final audit worlds.
+Improvement is not guaranteed. After the main creature dies, **Start next life with
+evolved champion** imports the winner and its learning parameters, archiving the old
+creature as `checkpoint.before-evolution-life-N.npz`. Ordinary **Start new life** keeps
+the main creature's own learning instead. **Pause or turn off Auto-start next life**
+if you want time to inspect a death or adopt a champion. Champion adoption is always
+manual; automatic next lives never import an evolution result.
+
+## Automatic lives and smooth viewing
+
+Under the habitat, **Auto-start next life** lets it continue unattended, even with
+no browser connected. Its death and final learning are recorded before respawn.
+The fresh body/world has a new seed; learned synapses, food/water/escape values,
+goal values, exploration experience, learning on/frozen state, current habitat stage,
+and long-term metrics survive. Short-lived sensory traces and neural activity reset.
+This does not make it invincible or guarantee that it learns predator avoidance.
+
+The delay is **real seconds**, unaffected by 1×–10× simulation speed. Pause freezes
+the countdown; turning the toggle off cancels it. Changing the delay or enabling
+the toggle again starts a full new countdown. These two settings save immediately.
+Restarting the server while dead also gives a fresh full delay; powered-off time
+does not count. Manual **Start new life** still works immediately. Frozen evaluation
+and evolution trials continue to end at death; they do not respawn within a trial.
+
+The browser receives small motion frames over the existing WebSocket and draws
+intermediate positions locally. This is live **state streaming**, not video. Creature
+and predator movement interpolate; food does not slide around, and the view never
+predicts movement beyond the latest received position. Death, pause, new lives,
+stage changes and reconnects reset the interpolation buffer. Brain/vital readouts
+refresh at 5 Hz; graphs at most once a second, with long-term data only when changed.
+All viewers share cached serialized frames. Slow connections skip old frames instead
+of building a playback queue. Browser visibility throttles drawing, not learning.
+
+The line below the habitat shows measured network-update and rendering rates.
+20 updates/s and about 60 rendered frames/s are targets, not OptiPlex guarantees;
+start at 1× if actual simulation speed falls behind. No new port, GPU, video service,
+Node.js installation, or change to the SSH tunnel is required.
 
 ## 1. Install on the OptiPlex (Ubuntu 24.04)
 
@@ -113,7 +194,7 @@ linger, reconnect if necessary. To uninstall the service, stop/disable it with
 
 ## Controls and what you are looking at
 
-- **Pause / Resume:** stops or resumes simulated time, including neural activity.
+- **Pause / Resume:** stops or resumes simulated time, neural activity, and any next-life countdown.
 - **1× / 2× / 5× / 10×:** requests a wall-clock speed. The 5 ms neural and 50 ms
   world steps stay fixed. Actual speed depends on your CPU; begin at 1×.
 - **Learning on / frozen:** toggles both TD value updates and recurrent STDP.
@@ -121,16 +202,18 @@ linger, reconnect if necessary. To uninstall the service, stop/disable it with
   floor to help escape repeated actions. This does not erase learned values.
 - **Save checkpoint:** saves now. Automatic saves occur every 30 real seconds
   and on normal shutdown.
-- **Start new life:** available only after starvation. Creates one new body/world,
-  retains synaptic weights and motor action values, and resets transient activity. It
-  does not happen automatically and does not evolve a population.
-- **Habitat:** creature, food, recent trail, and a 240° field of vision. Food
+- **Auto-start next life:** enabled by default, with an adjustable delay after death.
+  Disable it to wait for a manual restart. Pausing holds the countdown.
+- **Start new life:** immediately starts one new body/world after death, retaining
+  synaptic weights and motor/goal values while resetting transient activity.
+  Neither manual nor automatic respawning evolves a population.
+- **Habitat:** creature, food, blue water sources, coral predators, recent trail, and a 240° field of vision. Food
   regrows at the same position 25 simulated seconds after consumption.
-- **Through its eyes:** sixteen food brightness bins and sixteen wall-distance
-  bins. The brain has no access to global food coordinates.
+- **Through its eyes:** separate food, wall, and water channels plus omnidirectional
+  threat sensing. The creature has no access to global target coordinates.
 - **Inside the brain:** all 500 neurons, shaded by firing rate; motor populations;
   eligibility strength and distance of current weights from their initial values.
-- **Learning to forage:** pretrained/from-scratch source, chosen motor intent,
+- **Learning to survive:** starting experience, learned goal and motor intent,
   new learning updates, exploration rate, TD prediction error, and reward components.
 
 Eating within mouth reach is an automatic body reflex, not a learned fifth motor
@@ -141,9 +224,11 @@ feedback** rewards getting closer to and facing visible food. This is explicit
 reward shaping; it supplies no desired motor action. The learner only sees the
 retina and body sensations, not global food coordinates.
 
-There is no thirst, predator, mating, reproduction, evolution, object manipulation,
-language model, or episodic-memory database in v0.2. The thirst input block is
-reserved but unused. The current scope is deliberately one creature eating food.
+With water active, rewards use energy/hydration actually restored, preventing a
+full creature from collecting unlimited rewards by camping on a resource. Predator
+injuries carry a penalty. The learner chooses its response; no built-in rule says
+which turn to take or when to switch from food to water. Reward design, sensor
+encoding, motor primitives, body reflexes and predator behavior are programmed.
 
 ## Editing and updating from VS Code
 
@@ -153,10 +238,10 @@ effect on browser refresh. There is no automatic Python reload, because duplicat
 workers or restarts could interfere with the saved world.
 
 ```bash
-cd ~/neuroplex
-systemctl --user stop neuroplex
-git pull --ff-only
-bash setup.sh
+cd ~/neuroplex &&
+systemctl --user stop neuroplex &&
+git pull --ff-only &&
+bash setup.sh &&
 systemctl --user start neuroplex
 ```
 
@@ -174,6 +259,10 @@ Key files:
 | `neuroplex/policy.py` | Local TD action-value learning, credit traces, exploration and shaping |
 | `neuroplex/assets/foraging-v0.2.json` | Actual values exported from a continuous training run |
 | `neuroplex/world.py` | Body, food, retina, energy and reward |
+| `neuroplex/memory.py` | Fading resource observations and motion integration |
+| `neuroplex/curriculum.py` | Habitat stages and performance gates |
+| `neuroplex/experiments.py` | Frozen trials, inheritance, mutation, selection and audit |
+| `neuroplex/lab.py` | Bounded experiment worker, cancellation and result retention |
 | `neuroplex/simulation.py` | Sense → brain → move → reward loop and checkpoints |
 | `neuroplex/runner.py` | Simulation worker, pacing, process lock, autosaves |
 | `neuroplex/server.py` | FastAPI routes and live WebSocket stream |
@@ -188,6 +277,9 @@ for a fresh experiment:
 bash start.sh --port 8001 --data-dir data/experiment-2 --seed 8
 ```
 
+To open a separate predator habitat immediately, add `--stage 3`; `--stage 4`
+starts the hardest habitat. These flags only configure new data directories.
+
 To start with **zero motor values** instead of the learned starting values:
 
 ```bash
@@ -201,13 +293,14 @@ worlds can seek food immediately and continue adapting.
 ## Saving and recovery
 
 `data/checkpoint.npz` contains weights, voltages, spike state, eligibility and spike
-traces, thresholds, all three RNG states, motor values and eligibility, the held
-action and accumulated return, food/regrowth, creature, settings, metrics, and
+traces, thresholds, all four RNG states, motor and goal values and eligibility, the held
+action and accumulated return, sensory memory, resources, predators, creature, settings, metrics, and
 events. It is a numeric NumPy archive with JSON
 metadata, loaded with `allow_pickle=False`. The previous save is kept as
 `data/checkpoint.previous.npz`. Both are local to your OptiPlex and ignored by Git.
 
-Graceful restarts resume the exact saved state; powered-off time is not simulated.
+Graceful restarts resume the saved simulation state; powered-off time is not simulated.
+The wall-clock next-life countdown starts afresh if the saved creature is dead.
 After a power loss, up to the last 30 seconds of wall-clock progress may be lost.
 A corrupt checkpoint stops startup with an error instead of silently resetting
 your brain. To restore the previous save, stop the service, preserve the corrupt
@@ -217,16 +310,32 @@ restart. Back up the whole `data/` directory while the service is stopped.
 Only one process may use a data directory. If you see “already using”, stop the
 other instance or select another `--data-dir`; never remove a lock to bypass it.
 
+Metrics are also written to `data/metrics.jsonl`, rotating at 5 MB with three backups
+(about 20 MB total). The checkpoint retains the last six simulated hours and the
+last 256 completed lifetimes. Experiments live in `data/experiments/`: the latest 20
+job directories plus the last champion are retained; older generated job directories
+are removed automatically. The index keeps 100 compact results. Download a result
+you want to keep before retention removes its detailed job files. Cancelling keeps
+any champion from a completed generation. Server shutdown stops the worker too.
+
 ## Tests and a learning comparison
 
 ```bash
 cd ~/neuroplex
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
+.venv/bin/python scripts/validate-ecosystem.py
 .venv/bin/python -m neuroplex.benchmark --seconds 300 --seeds 501 502 503 504 505 --require-improvement
 ```
 
-The benchmark compares trained and zero motor values on matched fresh worlds,
+The Python suite includes automatic-life timing/persistence and streaming checks.
+Optional browser-interpolation unit tests need Node.js only on your development
+machine: `node --test tests/test_motion.cjs` (no npm dependencies). Node.js is not
+needed to run Neuroplex. [v0.3.1 validation](docs/VALIDATION-v0.3.1.md) describes the
+live-browser checks and remaining performance limits.
+
+The original food benchmark fixes stage 0, turns sensory memory and curriculum off,
+and compares trained and zero motor values on matched fresh worlds,
 with all weights frozen, the same exploration rate, and progress rewards disabled.
 It prints JSON lines and leaves your saved creature untouched. The pass gate
 requires every trained trial to survive and mean food to exceed 2x the control.

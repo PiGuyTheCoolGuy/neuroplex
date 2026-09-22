@@ -1,4 +1,18 @@
-# Neuroplex v0.2: learning to forage
+# Neuroplex architecture
+
+The v0.3 extension is documented in [ECOSYSTEM.md](ECOSYSTEM.md): water,
+predators, goal learning, sensory memory, curriculum, evaluation and evolution.
+The food-controller foundation below describes v0.2. Its 918-value table is now
+one of three motor tables, alongside a 324-value goal selector. The bundled food
+asset remains unchanged. See the extension for the current checkpoint format,
+observation layout, rewards and retention policy.
+
+v0.3.1 adds a Runner-owned, pausable wall-clock next-life timer, shared 20 Hz
+geometry caches, and browser-side pose interpolation. Experiments still end at
+death. See [release verification](VALIDATION-v0.3.1.md) for the protocol cadence,
+state-preservation checks and measured rendering limits.
+
+## v0.2 food-controller foundation
 
 v0.2 keeps the persistent **500-neuron / 16,000-synapse recurrent LIF network** and
 adds a small **tabular TD motor policy**. This is explicitly a hybrid architecture.

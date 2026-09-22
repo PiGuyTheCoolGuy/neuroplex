@@ -41,7 +41,7 @@ class Brain:
         self.steps = 0
 
     def reset_activity(self):
-        """Only an explicitly requested new life resets transient neural state."""
+        """A new life resets transient activity, never learned weights or values."""
         n = self.config.neurons
         self.v = self.rng.uniform(0.0, 0.7, n).astype(np.float32)
         self.spikes = np.zeros(n, dtype=bool)
@@ -59,7 +59,12 @@ class Brain:
     def step(self, senses: np.ndarray):
         dt = self.config.brain_dt
         drive = np.full(500, 0.92, dtype=np.float32)
-        drive[:80] = 0.05 + 2.6 * senses
+        drive[:80] = 0.05 + 2.6 * senses[:80]
+        if len(senses) >= 146:
+            # Additional sensory and persistent memory signals use association
+            # cells; the original 500-neuron topology and memories are retained.
+            drive[80:112] += 1.2 * senses[112:144]
+            drive[112:144] += 1.2 * senses[80:112]
         for i, (_, a, b) in enumerate(GROUPS[-4:]):
             drive[a:b] = self.motor_current[i]
         recurrent = np.bincount(
@@ -115,8 +120,8 @@ class Brain:
         turn = np.clip((right - left) / 50.0, -1, 1)
         return float(speed), float(turn)
 
-    def observe(self, senses: np.ndarray, eaten: int, touch: float, alive: bool):
-        td = self.policy.observe(senses, eaten, touch, alive, self.learning)
+    def observe(self, senses: np.ndarray, eaten: int, touch: float, alive: bool, **outcome):
+        td = self.policy.observe(senses, eaten, touch, alive, self.learning, **outcome)
         if td is not None:
             self.reinforce(float(np.clip(td, -1, 1)))
         self.last_reward = self.policy.last_reward

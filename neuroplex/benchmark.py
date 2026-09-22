@@ -12,7 +12,8 @@ from .simulation import Simulation
 
 
 def train(seed: int, seconds: float, food_count: int = 32, report_progress: bool = False):
-    sim = Simulation(Config(seed=seed, food_count=food_count, pretrained_policy=False))
+    sim = Simulation(Config(seed=seed, food_count=food_count, pretrained_policy=False,
+                            curriculum_enabled=False, memory_enabled=False))
     started = time.perf_counter()
     for _ in range(round(seconds / sim.config.world_dt)):
         sim.tick()
@@ -28,17 +29,18 @@ def train(seed: int, seconds: float, food_count: int = 32, report_progress: bool
         "method": "online TD motor policy; complete LIF simulation; no teacher or resets",
     }
     artifact = {"format": 1, "training": metadata,
-                "values": sim.brain.policy.values.tolist(), "visits": sim.brain.policy.visits.tolist()}
+                "values": sim.brain.policy.values[:153].tolist(), "visits": sim.brain.policy.visits[:153].tolist()}
     return artifact, {"type": "training", **metadata, "wall_seconds": round(time.perf_counter() - started, 3)}
 
 
 def evaluate(seed: int, seconds: float, values: np.ndarray | None, food_count: int = 32):
     # Both conditions get identical physics, initial SNN weights, RNG seeds, and
     # food. Only learned action values differ. Reward shaping is disabled here.
-    sim = Simulation(Config(seed=seed, food_count=food_count, pretrained_policy=False, shaping_scale=0))
+    sim = Simulation(Config(seed=seed, food_count=food_count, pretrained_policy=False, shaping_scale=0,
+                            curriculum_enabled=False, memory_enabled=False))
     sim.brain.learning = False
     if values is not None:
-        sim.brain.policy.values[:] = values
+        sim.brain.policy.values[:153] = values
     initial_values = sim.brain.policy.values.copy()
     initial_weights = sim.brain.weights.copy()
     started = time.perf_counter()

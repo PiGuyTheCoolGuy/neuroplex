@@ -10,13 +10,14 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b1015'/%3E%3Cpath d='M16 44V20l32 24V20' fill='none' stroke='%2385efd0' stroke-width='6'/%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/motion.js" defer></script>
     <script src="/static/app.js" defer></script>
   </head>
   <body>
     <header class="topbar">
       <a class="brand" href="/" aria-label="Neuroplex home"
         ><span class="brand-icon">N</span> neuroplex<span class="version"
-          >/ 0.2</span
+          >/ 0.3.1</span
         ></a
       >
       <div class="top-note">ARTIFICIAL LIFE LABORATORY</div>
@@ -28,10 +29,10 @@
       <section class="intro">
         <div>
           <div class="eyebrow">
-            EXPERIMENT 001 <span>•</span> FOOD & SURVIVAL
+            EXPERIMENT 002 <span>•</span> A CHANGING HABITAT
           </div>
-          <h1>A small beginning.</h1>
-          <p>One creature. A changing brain. A reason to keep moving.</p>
+          <h1>Learning to stay alive.</h1>
+          <p>Food, water, danger. One creature finding its way.</p>
         </div>
         <div class="clock">
           <span class="label">LIFETIME</span><strong id="lifetime">00:00</strong
@@ -78,8 +79,9 @@
               <div id="death-overlay" class="death-overlay" hidden>
                 <div>
                   <span class="eyebrow">LIFE ENDED</span>
-                  <h2>The creature starved.</h2>
+                  <h2 id="death-reason">The creature's life ended.</h2>
                   <p>Its learned connections are preserved.</p>
+                  <p id="auto-life-countdown" role="status"></p>
                   <button id="new-life" class="primary">
                     Start new life · keep memory
                   </button>
@@ -89,12 +91,20 @@
             <div class="legend">
               <span><i class="legend-creature"></i> Creature</span
               ><span><i class="legend-food"></i> Food</span
+              ><span><i class="legend-water"></i> Water</span
+              ><span><i class="legend-predator"></i> Predator</span
               ><span><i class="legend-vision"></i> Visual field</span
               ><label
                 ><input id="show-vision" type="checkbox" checked /> Show
                 vision</label
               >
             </div>
+            <div class="life-controls">
+              <label><input id="auto-life" type="checkbox" checked disabled> Auto-start next life</label>
+              <label>Delay <input id="auto-life-delay" type="number" min="1" max="300" step="1" value="10" required disabled> seconds</label>
+              <span class="quiet">Keeps learning · Pause holds the countdown</span>
+            </div>
+            <p id="stream-status" class="stream-status">Live state stream · smooth local rendering</p>
           </section>
           <div class="metric-grid">
             <div class="metric">
@@ -109,14 +119,14 @@
             <div class="metric">
               <span class="label">REWARD</span
               ><strong id="reward">+0.000</strong
-              ><small>food + progress − living costs</small>
+              ><small>resources + progress − costs and injuries</small>
             </div>
           </div>
           <section class="panel history-panel">
             <div class="panel-heading">
               <div>
                 <span class="section-number">02</span>
-                <h2>Energy over time</h2>
+                <h2>Vital signs over time</h2>
               </div>
               <span class="quiet">LAST 4 SIMULATED MINUTES</span>
             </div>
@@ -127,8 +137,55 @@
               aria-label="Energy history from zero to one hundred"
             ></canvas>
             <div class="chart-caption">
-              <span>Eating raises energy. Living and moving use it.</span
+              <span>Green: energy · blue: hydration · coral: health</span
               ><span id="history-range">0s — 0s</span>
+            </div>
+          </section>
+          <section class="panel experiment-panel">
+            <div class="panel-heading"><h2>Habitat curriculum</h2><span id="stage-name" class="pill">FORAGING</span></div>
+            <div class="panel-body">
+              <label class="field">Habitat stage
+                <select id="stage"><option value="0">1 · Foraging</option><option value="1">2 · Scarce food</option><option value="2">3 · Food and water</option><option value="3">4 · First predator</option><option value="4">5 · Wild habitat</option></select>
+              </label>
+              <div class="check-row"><label><input id="curriculum" type="checkbox" checked> Advance when ready</label><label><input id="memory-enabled" type="checkbox" checked> Sensory memory</label></div>
+              <p id="curriculum-status" class="help">Advancement requires sustained food intake and healthy vital signs.</p>
+              <p class="help">Predators hunt by programmed rules. Your creature learns its choices. Water and escape skills start with less experience than food.</p>
+            </div>
+          </section>
+          <section class="panel trends-panel">
+            <div class="panel-heading"><h2>Learning over hours</h2><a href="/api/metrics.csv" class="download">Export CSV</a></div>
+            <div class="panel-body compact"><label class="field">Measure
+              <select id="trend-metric"><option value="food_per_minute">Food per simulated minute</option><option value="drinks_per_minute">Drinks per simulated minute</option><option value="reward_per_second">Reward per simulated second</option><option value="energy">Energy</option><option value="hydration">Hydration</option><option value="health">Health</option><option value="updates">Learning updates</option><option value="weight_change">Synaptic change</option></select>
+            </label></div>
+            <canvas id="trends" height="170" aria-label="Selected learning measure over up to six simulated hours"></canvas>
+            <div class="chart-caption"><span id="trend-caption">One sample every 5 simulated seconds · up to 6 hours</span><span id="trend-current">—</span></div>
+            <div class="panel-body compact"><p id="life-summary" class="help">Completed lifetimes will appear here.</p></div>
+          </section>
+          <section class="panel experiment-panel">
+            <div class="panel-heading"><h2>Evaluation & evolution</h2><span id="lab-status" class="pill">IDLE</span></div>
+            <div class="panel-body">
+              <p class="help">Experiments use copies of this creature. Frozen trials disable learning and shaping rewards. Evolution trains and selects a small population, then audits its winner on new worlds.</p>
+              <form id="experiment-form">
+                <div class="form-grid">
+                  <label class="field">Experiment<select id="experiment-kind"><option value="evaluate">Frozen evaluation</option><option value="evolve">Evolution</option></select></label>
+                  <label class="field">Test habitat<select id="experiment-stage"><option value="0">Foraging</option><option value="1">Scarce food</option><option value="2">Food and water</option><option value="3">First predator</option><option value="4">Wild habitat</option></select></label>
+                  <label class="field">Seconds per world<input id="experiment-seconds" type="number" min="5" max="600" value="60" required></label>
+                  <label class="field">Random seed<input id="experiment-seed" type="number" min="0" max="4294967295" value="9001" required></label>
+                  <label class="field evaluation-field">Evaluation worlds<input id="experiment-trials" type="number" min="1" max="5" value="3" required></label>
+                  <label class="field evolution-field" hidden>Population<input id="experiment-population" type="number" min="2" max="8" value="4" required></label>
+                  <label class="field evolution-field" hidden>Generations<input id="experiment-generations" type="number" min="1" max="10" value="3" required></label>
+                  <label class="field evolution-field" hidden>Selection / audit seconds<input id="experiment-eval-seconds" type="number" min="5" max="300" value="30" required></label>
+                </div>
+                <div class="lab-actions"><button id="run-experiment" class="primary" type="submit" disabled>Run experiment</button><button id="cancel-experiment" type="button" disabled>Cancel</button></div>
+              </form>
+              <label class="check-row"><input id="auto-evaluate" type="checkbox" checked> Evaluate a copy every 30 simulated minutes</label>
+              <p id="lab-progress" class="help">One low-priority CPU worker. Your main creature continues running.</p>
+              <p id="lab-result" class="lab-result" role="status"></p>
+              <a id="download-result" href="/api/experiments/result" class="download" hidden>Download detailed results</a>
+              <canvas id="evolution-chart" height="120" aria-label="Best fitness across generations" hidden></canvas>
+              <button id="adopt-champion" type="button" disabled>Start next life with evolved champion</button>
+              <p class="help">Adoption is available after the main creature dies. It archives that creature's checkpoint. Evolution inherits learned values as well as mutations.</p>
+              <div id="evaluation-history" class="evaluation-history"></div>
             </div>
           </section>
           <section class="panel log-panel">
@@ -158,6 +215,11 @@
             <div class="stat-line">
               <span>Movement</span><strong id="movement">—</strong>
             </div>
+            <div class="stat-line"><span>Hydration</span><strong id="hydration">Waiting for water stage</strong></div>
+            <div class="vital-track"><div id="hydration-bar"></div></div>
+            <div class="stat-line"><span>Health</span><strong id="health">100</strong></div>
+            <div class="vital-track"><div id="health-bar"></div></div>
+            <div class="stat-line"><span>Drinks / attacks</span><strong id="drinks-attacks">0 / 0</strong></div>
           </section>
           <section class="panel vision-panel">
             <div class="panel-heading">
@@ -174,9 +236,11 @@
               <span>Left</span><span>Ahead</span><span>Right</span>
             </div>
             <p class="help">
-              Brighter means closer. The brain sees these signals, hunger, and
-              touch.
+              Brighter means closer. Water has its own visual channel. Threat sensing works in every direction.
             </p>
+            <div class="retina-label"><span>WATER</span><span>THREATS · 360°</span></div>
+            <div id="ecology-retina" class="retina" aria-label="Water vision and omnidirectional threat sensors"></div>
+            <p id="memory-status" class="help">Sensory memory: no target retained yet.</p>
           </section>
           <section class="panel brain-panel">
             <div class="panel-heading">
@@ -224,7 +288,7 @@
           </section>
           <section class="panel motor-panel">
             <div class="panel-heading">
-              <h2>Learning to forage</h2>
+              <h2>Learning to survive</h2>
               <span class="live-tag">TD POLICY</span>
             </div>
             <div class="stat-line">
@@ -234,6 +298,8 @@
             <div class="stat-line">
               <span>Motor intent</span><strong id="policy-action">—</strong>
             </div>
+            <div class="stat-line"><span>Current goal</span><strong id="policy-goal">Food</strong></div>
+            <div class="stat-line"><span>Goal-choice updates</span><strong id="goal-updates">0</strong></div>
             <div class="stat-line">
               <span>New learning updates</span
               ><strong id="policy-updates">0</strong>
@@ -245,7 +311,7 @@
               <span>Prediction error</span><strong id="policy-td">0.000</strong>
             </div>
             <div class="stat-line">
-              <span>Food / cost reward</span
+              <span>Resource / cost reward</span
               ><strong id="policy-base">0.000</strong>
             </div>
             <div class="stat-line">
@@ -253,8 +319,7 @@
               ><strong id="policy-shaping">0.000</strong>
             </div>
             <p class="help">
-              Learned action values choose a motor intent. Spiking neurons move
-              the body. Exploration decreases with experience.
+              Learned goal values choose food, water, or escape. Learned motor values drive spiking neurons. Memory is an engineered sensory trace.
             </p>
           </section>
           <div class="experiment-note">
