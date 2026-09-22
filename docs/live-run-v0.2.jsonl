@@ -1,0 +1,10 @@
+{"seconds": 60.0, "food": 36, "energy": 92.47, "alive": true, "live_updates": 240}
+{"seconds": 120.0, "food": 64, "energy": 98.76, "alive": true, "live_updates": 480}
+{"seconds": 180.0, "food": 92, "energy": 98.84, "alive": true, "live_updates": 720}
+{"seconds": 240.0, "food": 122, "energy": 95.29, "alive": true, "live_updates": 960}
+{"seconds": 300.0, "food": 152, "energy": 98.51, "alive": true, "live_updates": 1200}
+{"seconds": 360.0, "food": 188, "energy": 95.31, "alive": true, "live_updates": 1440}
+{"seconds": 420.0, "food": 231, "energy": 98.95, "alive": true, "live_updates": 1680}
+{"seconds": 480.0, "food": 268, "energy": 99.86, "alive": true, "live_updates": 1920}
+{"seconds": 540.0, "food": 301, "energy": 98.53, "alive": true, "live_updates": 2160}
+{"seconds": 600.0, "food": 331, "energy": 99.24, "alive": true, "live_updates": 2400}

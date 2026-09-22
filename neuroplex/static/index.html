@@ -16,7 +16,7 @@
     <header class="topbar">
       <a class="brand" href="/" aria-label="Neuroplex home"
         ><span class="brand-icon">N</span> neuroplex<span class="version"
-          >/ 0.1</span
+          >/ 0.2</span
         ></a
       >
       <div class="top-note">ARTIFICIAL LIFE LABORATORY</div>
@@ -109,7 +109,7 @@
             <div class="metric">
               <span class="label">REWARD</span
               ><strong id="reward">+0.000</strong
-              ><small>change in hunger, each tick</small>
+              ><small>food + progress − living costs</small>
             </div>
           </div>
           <section class="panel history-panel">
@@ -222,11 +222,46 @@
             </div>
             <div id="motors"></div>
           </section>
+          <section class="panel motor-panel">
+            <div class="panel-heading">
+              <h2>Learning to forage</h2>
+              <span class="live-tag">TD POLICY</span>
+            </div>
+            <div class="stat-line">
+              <span>Starting experience</span
+              ><strong id="policy-source">Learned policy</strong>
+            </div>
+            <div class="stat-line">
+              <span>Motor intent</span><strong id="policy-action">—</strong>
+            </div>
+            <div class="stat-line">
+              <span>New learning updates</span
+              ><strong id="policy-updates">0</strong>
+            </div>
+            <div class="stat-line">
+              <span>Exploration</span><strong id="policy-exploration">—</strong>
+            </div>
+            <div class="stat-line">
+              <span>Prediction error</span><strong id="policy-td">0.000</strong>
+            </div>
+            <div class="stat-line">
+              <span>Food / cost reward</span
+              ><strong id="policy-base">0.000</strong>
+            </div>
+            <div class="stat-line">
+              <span>Progress reward</span
+              ><strong id="policy-shaping">0.000</strong>
+            </div>
+            <p class="help">
+              Learned action values choose a motor intent. Spiking neurons move
+              the body. Exploration decreases with experience.
+            </p>
+          </section>
           <div class="experiment-note">
             <span>AN EXPERIMENT IN LEARNING</span>
             <p>
-              Movement comes from the spiking brain. Eating on contact is a body
-              reflex. Survival is not guaranteed.
+              A learned motor policy works with the spiking brain. Eating on
+              contact is a body reflex. Learning continues during its lifetime.
             </p>
           </div>
         </aside>

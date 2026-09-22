@@ -22,10 +22,10 @@ class Control(BaseModel):
     value: bool | int | None = None
 
 
-def create_app(data_dir: Path, seed: int = 7) -> FastAPI:
+def create_app(data_dir: Path, seed: int = 7, untrained: bool = False) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
-        runner = Runner(data_dir, seed)
+        runner = Runner(data_dir, seed, untrained)
         app.state.runner = runner
         runner.start()
         try:

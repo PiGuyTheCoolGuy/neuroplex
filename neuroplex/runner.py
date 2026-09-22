@@ -2,6 +2,8 @@
 
 import fcntl
 import logging
+import os
+import shutil
 from pathlib import Path
 import threading
 import time
@@ -13,7 +15,7 @@ log = logging.getLogger(__name__)
 
 
 class Runner:
-    def __init__(self, directory: Path, seed: int = 7):
+    def __init__(self, directory: Path, seed: int = 7, untrained: bool = False):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.file_lock = (self.directory / "process.lock").open("a")
@@ -24,7 +26,20 @@ class Runner:
             raise RuntimeError(f"Neuroplex is already using {self.directory}. Stop the other process first.") from None
         self.checkpoint = self.directory / "checkpoint.npz"
         try:
-            self.sim = Simulation.load(self.checkpoint) if self.checkpoint.exists() else Simulation(Config(seed=seed))
+            self.sim = (Simulation.load(self.checkpoint) if self.checkpoint.exists()
+                        else Simulation(Config(seed=seed, pretrained_policy=not untrained)))
+            if self.sim.migrated_from == 1:
+                # One permanent original survives ordinary autosave rotation.
+                backup = self.directory / "checkpoint.v1.npz"
+                if not backup.exists():
+                    temporary = backup.with_suffix(".tmp")
+                    with self.checkpoint.open("rb") as source, temporary.open("wb") as destination:
+                        shutil.copyfileobj(source, destination)
+                        destination.flush()
+                        os.fsync(destination.fileno())
+                    os.replace(temporary, backup)
+                self.sim.save(self.checkpoint)
+                log.info("Migrated v0.1 checkpoint; original retained at %s", backup)
         except Exception:
             self.file_lock.close()
             raise

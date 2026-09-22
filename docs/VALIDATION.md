@@ -1,83 +1,115 @@
-# v0.1 validation
+# v0.2 learning validation
 
-These are observations from the development environment, not performance claims
-about the user's OptiPlex. Default configuration; Python 3.12; dependencies pinned
-in `requirements.txt` and `requirements-dev.txt`.
+## What was measured
 
-## Automated behavior checks
+The trained **motor action values** produce useful foraging on unseen layouts.
+This is a hybrid TD-policy / spiking-controller result, not proof that recurrent
+STDP alone learned navigation. All runs used the complete LIF simulation and CPU
+only; none ran on the user's OptiPlex.
 
-`python -m pytest -q`: **12 tests passed**.
+The bundled policy was learned from zero action values in **one continuous
+600-second simulation**, seed 7, with 32 food patches. It received 2,400 online
+updates, ate 169 food items, and stayed alive. No teacher, demonstrations, automatic
+reset, food teleport, energy rescue, or hard-coded food-steering command was used.
+Progress reward does encode prior knowledge about facing and approaching food.
 
-The tests cover:
+The first minute of that training run found 6 food items; the fifth found 24.
+This single training trajectory is descriptive, not the main evidence of learning.
+The exported values are in `neuroplex/assets/foraging-v0.2.json`.
 
-- Metabolic starvation with no food, terminal death, and exact hunger-change reward.
-- Food consumed once, energy restored, and regrowth delayed correctly.
-- Egocentric retina excludes out-of-range and out-of-view food.
-- Collision constrains the body without supplying an automatic turn.
-- Causal versus reverse spike order produces the expected eligibility signs.
-- Reward direction changes eligible weights; zero-eligibility synapses are untouched.
-- Frozen learning keeps weights fixed; plasticity preserves inhibitory signs and bounds.
-- Checkpoint restart reproduces subsequent brain arrays, world, and metrics **exactly**.
-- Pause/death retain state; an explicit new life preserves learned weights.
-- Invalid checkpoint rejection and exclusion of two processes sharing one world.
-- Dashboard assets, HTTP controls, validation, WebSocket snapshots, and shutdown save.
-
-`bash setup.sh` and `pip check` also succeeded. Shell scripts passed `bash -n`, and
-dashboard JavaScript passed `node --check`. The systemd service generator was
-exercised with a temporary output path, and the generated unit passed
-`systemd-analyze verify`. An actual systemd login/boot session is
-not available here, so enabling the service on the OptiPlex remains a deployment
-step rather than a tested remote action.
-
-## Learning versus frozen controls
-
-Command:
+## Final evaluation
 
 ```bash
-OPENBLAS_NUM_THREADS=1 .venv/bin/python -m neuroplex.benchmark --seconds 180 --seeds 7 8 9
+OPENBLAS_NUM_THREADS=1 .venv/bin/python -m neuroplex.benchmark \
+  --seconds 300 --seeds 501 502 503 504 505 --require-improvement
 ```
 
-For each seed, both conditions start with the same world and random brain. Frozen
-means synaptic weights are held fixed; neural activity, intrinsic threshold
-adaptation, and exploration continue. Each trial is a fresh isolated simulation
-and never reads or writes `data/checkpoint.npz`.
+These five seeds were reserved for the final check after development on other
+seeds. Each condition used matching initial food, body, SNN weights, and random
+seeds. The **only trained parameters transferred were the 918 action values**.
+All policy and recurrent weights were frozen and checked for exact equality at
+the end. Progress reward was disabled. Both conditions retained the same 5%
+exploration floor; random trajectories can diverge after different choices.
+There was no food-coordinate input or action teacher.
 
-| Seed | Learning | Food eaten | Energy at 180 s | Alive at 180 s | Mean absolute weight change |
-| ---: | --- | ---: | ---: | --- | ---: |
-| 7 | Frozen | 22 | 89.84 | Yes | 0 |
-| 7 | On | 35 | 94.84 | Yes | 0.01267 |
-| 8 | Frozen | 21 | 87.63 | Yes | 0 |
-| 8 | On | 11 | 33.02 | Yes | 0.01364 |
-| 9 | Frozen | 18 | 97.27 | Yes | 0 |
-| 9 | On | 18 | 89.97 | Yes | 0.01757 |
+Each world had 32 regrowing food patches (the live default has 64), with a
+300-simulated-second limit. Death ended that trial; no respawn extended it.
 
-The result is mixed: **the experiment has functioning online plasticity, but these
-trials do not demonstrate a consistent learning advantage**. All trials are
-censored at 180 seconds, so they do not establish complete lifespans. Dense food
-and intrinsic exploration can keep even frozen networks alive. Trajectories diverge
-when weights change, so one favorable trajectory is insufficient evidence of a
-learned food-seeking strategy. Raw results are in `benchmark-v0.1.jsonl`.
+| World seed | Untrained food | Trained food | Untrained alive at 300 s | Trained alive at 300 s | Trained final energy |
+| ---: | ---: | ---: | --- | --- | ---: |
+| 501 | 18 | 126 | Yes | Yes | 95.06 |
+| 502 | 3 | 131 | No | Yes | 95.84 |
+| 503 | 5 | 147 | No | Yes | 99.09 |
+| 504 | 11 | 126 | No | Yes | 99.21 |
+| 505 | 2 | 126 | No | Yes | 97.69 |
 
-A preliminary seed-7 run lasted 60 simulated seconds, ate 11 food items, and ended
-with 71.73 energy. It is a functionality check, not additional independent evidence
-of learning. We did not tune defaults on the three-seed comparison above.
+Mean food: **7.8 untrained versus 131.2 trained**, about **16.8×** as much in these
+trials. Survival at the time limit: **1/5 versus 5/5**. The preset command's
+pass condition (all trained agents survive; mean food exceeds 2× control) passed.
+This comparison is against untrained values in the *same v0.2 architecture*, not
+a matched replay of v0.1. Raw records: [benchmark-v0.2.jsonl](benchmark-v0.2.jsonl).
 
-## Resource observations
+## A failure found during development
 
-The six headless 180-second trials took approximately **23–37 wall-clock seconds**
-each in the development environment (about 4.9–7.9× simulated speed). Concurrent
-work and CPU differences affect these timings. A separate short headless run had
-about **32.4 MiB peak resident memory**, excluding a browser and the web server.
-The default arrays are small; high playback speed, not memory capacity, is the
-likely constraint on an older OptiPlex. Begin at 1× and use the actual-speed readout.
+An earlier completely greedy evaluation on seeds 201–205 ate much more food than
+its control but survived only 4/5 trials. Seed 202 ate 47 food items, then got stuck
+and starved at 171.95 s. That candidate failed the survival gate. Its results are
+preserved in [development-v0.2-greedy.jsonl](development-v0.2-greedy.jsonl).
 
-No GPU was used. No experiment was run directly on the user's machine.
+Keeping a 5% exploration floor even with frozen weights resolved that development
+case: a 300-second rerun on seed 202 ate 132 food items and remained alive. The final
+evaluation above then used different seeds (501–505). Exploration is independent
+of food direction, and both final conditions receive the same exploration rate.
 
-## Browser check
+## Continued learning in the live default world
 
-The dashboard passed a real Chromium browser check at desktop (1440 px) and
-phone (390 px) widths. The smoke check exercised the live stream, pause, learning
-freeze, speed selection, and save controls. There were no JavaScript errors or
-mobile horizontal overflow; both screenshots were visually inspected. Browser
-testing dependencies are development tools only; Ubuntu deployment requires no
-Node.js or browser installation on the server.
+A separate default run (64 food patches, seed 7, bundled starting values) continued
+learning for **600 simulated seconds**. It ate **331 food items**, stayed alive,
+ended at **99.24 energy**, and performed **2,400 new updates**. It did not freeze
+learning or reset after the starting policy was loaded. See
+[live-run-v0.2.jsonl](live-run-v0.2.jsonl).
+
+This run has a denser world than the training and comparison worlds; its food
+count should not be directly interpreted as a learning gain over those runs.
+
+## Software verification
+
+**20 automated tests passed**, covering world/energy rules, causal spike traces,
+weight bounds, chosen-action credit, terminal TD handling, shaping-cycle accounting,
+frozen weights and counters, motor spikes being necessary for movement, exact
+mid-action checkpoint continuation, version-1 migration for living and dead bodies,
+permanent original-checkpoint backup, process exclusion, API controls, and live
+WebSocket snapshots.
+
+A real Chromium browser check passed at desktop (1440 px) and phone (390 px)
+widths: no JavaScript errors or horizontal overflow. It exercised the learned-policy
+panel, live update counters, pause, freezing, the 5% frozen exploration indicator,
+and saving. Screenshots were visually inspected. Editable package installation and
+CLI parsing passed. The existing Ubuntu/systemd workflow needs no new dependency.
+
+## Limits and reproduction
+
+Five worlds and a ten-minute live run are finite tests. They demonstrate learned
+food seeking on this simple environment; they do not guarantee indefinite survival,
+reliable behavior on every seed, or generalization to changed sensory/motor geometry,
+sparse-food worlds, predators, or obstacles. Exploration can still make mistakes.
+The Q-table is a deliberate change from relying solely on recurrent STDP.
+
+To reproduce training (separate from the running creature):
+
+```bash
+.venv/bin/python -m neuroplex.benchmark --train-seconds 600 --train-seed 7 \
+  --food-count 32 --seconds 300 --seeds 501 502 503 504 505 \
+  --export-policy data/retrained-policy.json --require-improvement
+```
+
+Training prints progress every simulated minute. The export is not automatically
+installed over an existing live policy. To watch a new creature learn from zero:
+
+```bash
+bash start.sh --port 8001 --data-dir data/from-scratch --untrained --seed 7
+```
+
+Use a new data directory. Neither command erases a saved world. Default startup
+uses the bundled learned motor values, then continues adapting online. Historical
+v0.1 measurements remain in [VALIDATION-v0.1.md](VALIDATION-v0.1.md).

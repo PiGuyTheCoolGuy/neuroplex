@@ -1,176 +1,188 @@
-# Neuroplex v0.1 architecture
+# Neuroplex v0.2: learning to forage
 
-The lifetime-learning design follows the earlier Neuroplex discussion: a small,
-continuously running, recurrent leaky integrate-and-fire (LIF) spiking neural
-network with local eligibility traces and a global homeostatic reward signal.
-The recurrent excitatory network is plastic; this is not a fixed reservoir with
-only a trained readout. It is also not a CNN or an LLM.
+v0.2 keeps the persistent **500-neuron / 16,000-synapse recurrent LIF network** and
+adds a small **tabular TD motor policy**. This is explicitly a hybrid architecture.
+The action-value table is not a spiking layer, and the demonstrated improvement
+should not be attributed to recurrent STDP alone. All learning is local and online;
+there is no backpropagation, autodiff, replay buffer, minibatch training, action
+teacher, or hard-coded rule that selects a turn toward food.
 
-## The loop
+## Why v0.1 needed a change
 
-Every 50 ms of simulated time:
+The original network broadcast hunger changes to all eligible excitatory synapses.
+That made weights change without reliably assigning credit to useful movement.
+It also left the motor interface drifting with recurrent activity. v0.2 learns
+values for specific motor actions, gives progress feedback before the next meal,
+and keeps the spiking actuators stable enough to associate actions with outcomes.
 
-1. Encode the current egocentric food/wall retina, hunger, and collision touch.
-2. Advance the same brain through ten 5 ms LIF steps.
-3. Decode four motor populations' smoothed firing rates into speed and turning.
-4. Move the body, spend energy, and consume any food within mouth reach.
-5. Compute hunger reduction and apply it to the existing synaptic eligibility.
-6. Carry **all** state forward into the next tick.
+The old architecture and mixed initial results remain in
+[ARCHITECTURE-v0.1.md](ARCHITECTURE-v0.1.md) and
+[VALIDATION-v0.1.md](VALIDATION-v0.1.md).
 
-The Python worker is independent of the browser. WebSocket snapshots are sent at
-5 Hz. Multiple clients watch the same one creature. A fixed physical step means
-changing playback speed cannot change integration accuracy. If the CPU is slow,
-simulated time slows rather than skipping neural steps.
+## Continuous loop
 
-## Neural layout
+The world advances by 50 ms; the LIF network takes ten 5 ms steps per world step.
+Every 250 ms the motor policy selects an intent and holds it while the spiking
+motor populations execute it. State, traces, weights, values, and random streams
+continue across decisions. A live creature is never automatically reset or rescued.
 
-| Neuron indices (inclusive) | Count | Role |
-| --- | ---: | --- |
-| 0–15 | 16 | Food retina: brightest visible food per angular bin |
-| 16–31 | 16 | Walls: ray distance transformed into brightness |
-| 32–47 | 16 | Hunger intensity |
-| 48–63 | 16 | Reserved thirst channels, zero in v0.1 |
-| 64–79 | 16 | Body collision touch |
-| 80–399 | 320 | Recurrent association/memory |
-| 400–424 | 25 | Forward motor population |
-| 425–449 | 25 | Backward motor population |
-| 450–474 | 25 | Left motor population |
-| 475–499 | 25 | Right motor population |
+1. Encode food/wall retina, hunger, and touch.
+2. Choose a motor intent from learned values, with occasional exploration.
+3. Apply that intent as currents to the four motor populations.
+4. Advance the LIF network; decode firing rates into body movement.
+5. Move, spend energy, eat food within reach, and observe the result.
+6. Accumulate reward; at the action boundary update action values and eligibility.
+7. Use a clipped TD error to modulate the recurrent STDP traces.
 
-Each neuron targets 32 distinct association/motor neurons: **16,000 directed
-synapses**, with no self-connections. Incoming recurrent synapses do not target
-sensory neurons; this keeps sensory encoding clean. Sensory and motor projections
-are otherwise randomly initialized. We do not preassign associations such as
-“green food on left → turn left”.
+The browser only observes and controls this server-side loop. Simulation speed
+changes wall-clock pacing, never the neural or physical integration step.
 
-Sixty-four association neurons are inhibitory (20% of that group), with fixed
-negative outgoing weights. The other 436 neurons are excitatory: **13,952 plastic
-synapses** remain nonnegative and are clipped at 0.12. Neurons cannot switch between
-inhibitory and excitatory. Synapses are sparse pre/post index arrays, avoiding a
-dense matrix multiplication or a Python object per connection.
+## Observations and action values
 
-## LIF dynamics and exploration
+The policy sees only the existing **egocentric sensory vector**, never world food
+coordinates, desired headings, future events, or ground-truth action labels.
+Its intentionally compact representation has 153 possible contexts:
 
-Voltage uses normalized units with reset 0 and initial threshold 1:
+- 17 food sectors: the brightest of sixteen angular food bins, or no visible food.
+- Three proximity bands, using food brightness thresholds 0.45 and 0.80.
+- Three wall contexts: clear, nearby wall stronger on the left, or stronger on the
+  right. This uses central wall brightness and touch.
 
-```text
-v += (dt / 20ms) * (external_current - v)
-v += sum(weight * previous_presynaptic_spike)
-v += small independent voltage noise
-if v >= threshold and not refractory:
-    spike = 1
-    v = 0
-    refractory = 5ms
-```
+There are six possible motor intents: forward, curve left, curve right, turn left,
+turn right, and backward. The **153 × 6 = 918 action values** start at zero in an
+untrained experiment. Encoding where food appears does not specify which action
+is correct. The policy must learn that association from its action outcomes.
 
-Sensory current is `0.05 + 2.6 * sensory_intensity`. Previous-bin spikes supply
-recurrent input, giving synapses a one-step delay. Rates use a 250 ms exponential
-filter. Bounded adaptive thresholds in nonsensory neurons target roughly 12 Hz
-over a slower time scale; this reduces runaway recurrent activity, without
-claiming precise homeostatic control. Thresholds remain in [0.7, 1.8].
-
-Exploration is **explicitly innate**: nonsensory tonic drive, a small forward
-motor bias, voltage noise, and three temporally correlated motor-current noise
-signals. None can access food position, bearing, or the best action. These signals
-keep the initial network from being motionless. Their effects flow through the
-same motor neurons as sensory/recurrent influences.
+A greedy intent maximizes the context's action value; exact ties are random.
+Exploration probability during learning is:
 
 ```text
-speed_fraction = tanh((forward_rate - backward_rate) / 12)
-turn_fraction  = tanh((right_rate - left_rate) / 8)
-speed = speed_fraction * 9 world_units/second
-turn  = turn_fraction * 2.4 radians/second
+epsilon = 0.05 + (0.35 - 0.05) * exp(-learning_updates / 1500)
 ```
 
-Touch signals a wall collision. There is no hard-coded bounce, turn-away reflex,
-food homing, target position lookup in the brain, or movement teleport.
+When learning is frozen, weights stay fixed but a 5% exploration floor remains.
+This is independent of food bearing. It helps escape repeated poor actions in a
+coarse or unfamiliar context. The frozen comparison gives both trained and
+untrained conditions the same floor. Setting `exploration_floor=0` is supported
+for experiments, but a completely greedy policy can get stuck.
 
-## Plasticity and reward
+## Reward and credit assignment
 
-Each neuron has exponentially decaying pre/post spike traces (20 ms). Each synapse
-has eligibility (5 s), so a delayed food reward can affect recent spike pairings.
-Using decayed traces **before** adding current spikes:
+Living still costs 0.70 energy/s plus 0.12 per commanded movement unit. Food restores
+up to 24 energy; at zero the creature dies. Ingestion remains a body reflex.
+The old hunger-change reward is retained separately as `total_drive_reward`.
+
+The new learning reward, at each world step, is:
 
 ```text
-pre_trace  *= exp(-dt / 20ms)
-post_trace *= exp(-dt / 20ms)
-eligibility *= exp(-dt / 5s)
-eligibility += post_spike * pre_trace[pre]
-eligibility -= 1.05 * pre_spike * post_trace[post]
-eligibility = clip(eligibility, -8, +8)
-pre_trace += spike
-post_trace += spike
+base = 6 * food_eaten - 0.2 * dt - 2.4 * dt * wall_contact
+if dead: base -= 6
+reward = base + gamma_tick * Phi(next_observation) - Phi(observation)
 ```
 
-Only excitatory connections receive eligibility updates. Causal pre-before-post
-pairing contributes positively; the reverse contributes negatively. Same-bin
-spikes do not impose an arbitrary ordering.
-
-At the end of each world step:
+The progress potential uses only visible food:
 
 ```text
-hunger = 1 - energy / 100
-reward = hunger_before - hunger_after
-weight += 0.025 * reward * eligibility
-weight = clip(weight, 0, 0.12)       # excitatory only
+Phi = 4 * max_over_visual_bins(
+    food_brightness * (0.3 + 0.7 * max(0, cos(bin_angle)))
+)
 ```
 
-This scalar is a *reward modulator*, not a learned dopamine model, TD critic, or
-reward prediction error. Negative reward reverses the sign of eligible updates.
-It does not necessarily weaken every connection. Learning freeze stops synaptic
-updates but not intrinsic threshold adaptation or ongoing state dynamics.
+This deliberately supplies prior knowledge: approaching and facing visible food
+is useful. It supplies **scalar feedback, not a steering command**. It is reward
+shaping, not an action teacher. Eating gets a separate positive reward even at
+full energy, because this experiment's objective is continual food seeking.
+Time and wall-contact penalties discourage stalling and pushing against walls.
 
-The reward is applied once per world step as a discrete energy change; it is not
-multiplied by dt again. Basal energy cost is 0.70/s, movement cost 0.12 per commanded
-distance unit, and each food gives up to 24 energy (capped at 100). A blocked body
-still spends energy attempting to move. There is no extra reward for approaching
-food, staying alive, touching walls, or dying. At zero energy the body and neural
-loop stop. There is no automatic reset.
+`gamma_tick = 0.96 ** (world_dt / action_seconds)` matches the policy's discount.
+A held action accumulates discounted rewards `R` and a cumulative discount `G`:
 
-Because reward is a difference of a bounded drive, cumulative reward telescopes
-to initial hunger minus current hunger. **Do not use cumulative reward as evidence
-of improving lifetime behavior.** Measure food eaten, survival, and sustained
-energy, and compare frozen controls over multiple initial conditions.
+```text
+delta = R + G * max_a Q(next_context, a) - Q(context, chosen_action)
+trace *= G * 0.40
+trace[context, chosen_action] = 1
+Q += 0.30 * clip(delta, -10, 10) * trace
+```
 
-## Memory and limitations
+At death, both the bootstrap value and next potential are zero. A nongreedy action
+cuts earlier eligibility, following Watkins-style Q(lambda) credit assignment.
+Q is bounded to [-100, 200]. There are no updates when learning is frozen.
 
-- **Immediate state:** membrane voltage, refractory status, and previous spikes.
-- **Short-lived context:** recurrent activity, 250 ms rates, 20 ms spike traces,
-  5 s eligibility, and motor noise state.
-- **Longer-lived memory:** reward-dependent synaptic weights. They persist across
-  saves and, if requested, across a manually started new life.
-- **No explicit episodic recall:** no symbolic memory, remembered food map,
-  hippocampal module, planning algorithm, replay, or supervised teacher.
+Discounted potential differences telescope, so repeatedly rotating between the
+same visual states cannot accumulate a free positive shaping return. The test
+suite checks this and terminal handling. This property does not imply convergence:
+observations are partial, contexts are coarse, and exploratory behavior can fail.
 
-The simple topology is an experimental substrate. Sparse rewards, anti-causal
-updates, exploration bias, credit assignment, and homeostatic dynamics can make
-learning unstable or counterproductive. An individual 180-second comparison is
-too short to establish convergence. Food density and random exploration can
-produce plenty of eating without learned navigation. Future changes should be
-justified with multi-seed controlled experiments, not an attractive trajectory.
+## Spiking network and motor interface
 
-## Persistence and extension boundaries
+The layout is unchanged:
 
-Checkpoints include the full dynamic state and both NumPy random generators.
-Resuming within the same pinned software stack reproduces subsequent simulation
-steps exactly in the checkpoint test. They use a version field; incompatible
-versions fail explicitly. Runtime speed, pause, learning setting, and recent
-statistics are saved too. No offline time is simulated.
+| Neurons (inclusive) | Role |
+| --- | --- |
+| 0–31 | Food and wall retina |
+| 32–47 | Hunger |
+| 48–63 | Reserved, unused thirst input |
+| 64–79 | Touch |
+| 80–399 | Recurrent association/memory |
+| 400–424 | Forward motor population |
+| 425–449 | Backward motor population |
+| 450–474 | Left motor population |
+| 475–499 | Right motor population |
 
-Start additional behavioral features in `world.py` and a corresponding documented
-sensory/motor mapping. The existing thirst block is deliberately reserved. More
-neurons require changing the explicit layout and checkpoint version, not simply
-editing a count. The current implementation deliberately handles only one body.
+Sixty-four association neurons remain inhibitory, with fixed negative outgoing
+weights. The 13,952 excitatory synapses retain bounded reward-modulated STDP.
+Pre/post traces decay over 20 ms and eligibility over 5 s. A completed action's
+TD error, clipped to [-1, 1], modulates them at learning rate 0.001. Adaptive
+thresholds now regulate association neurons only. Very small rates/traces are
+zeroed to avoid CPU denormal arithmetic.
 
-## Background
+Motor intents specify currents, not movement coordinates. Recurrent input to
+motor neurons is scaled by 0.05, motor thresholds stay at 1, and their rate filter
+uses 40 ms. This keeps the action interface stable while allowing actual spikes
+to determine speed and turning:
 
-This is a simplified engineering implementation inspired by three-factor learning,
-not a numerical reproduction of a particular paper:
+```text
+speed_fraction = clip((forward_rate - backward_rate) / 50, -1, 1)
+turn_fraction = clip((right_rate - left_rate) / 50, -1, 1)
+```
 
-- R. V. Florian (2007), *Reinforcement learning through modulation of spike-timing-
-  dependent synaptic plasticity*: <https://florian.io/papers/2007_Florian_Modulated_STDP.pdf>
-- Gerstner et al. (2018), *Eligibility Traces and Plasticity on Behavioral Time Scales*:
-  <https://arxiv.org/abs/1801.05219>
-- FastAPI lifespan (one runner, clean shutdown):
-  <https://fastapi.tiangolo.com/advanced/events/>
-- FastAPI WebSockets: <https://fastapi.tiangolo.com/advanced/websockets/>
+The association network remains plastic, but the **tabular motor policy is the
+main navigation learner** in this version. It is not accurate to describe the
+measured foraging skill as emerging solely from an unstructured recurrent SNN.
+
+## Trained starting values and persistence
+
+`assets/foraging-v0.2.json` contains values learned in a complete, continuous
+600-second simulation: seed 7, 32 food patches, zero initial action values,
+2,400 updates, 169 food items, no death, rescue, teacher, or reset. The data was
+exported from training, not hand-authored into a state/action rule.
+
+New worlds use these values by default and keep learning. `--untrained` uses zero
+values for a **new** data directory. It never erases an existing checkpoint.
+New lives retain both recurrent weights and action values; only transient activity
+and action traces reset.
+
+Checkpoint format 2 stores all original neural/world arrays plus policy values,
+visits, eligibility, action-in-progress, discounted return, counters, and the
+policy's independent RNG. Mid-action restore is tested for exact continuation.
+
+A format-1 checkpoint upgrades automatically. Its body, food, time, preferences,
+and recurrent weights are preserved. The new learned policy is added; motor
+thresholds are set to the new fixed value. The original file is retained as
+`checkpoint.v1.npz`, independently of the rotating `checkpoint.previous.npz`.
+A dead creature stays dead until the user requests a new life.
+
+## References and scope
+
+- Ng, Harada & Russell (1999), potential-based shaping:
+  <https://ai.stanford.edu/~ang/papers/shaping-icml99.pdf>
+- Chung & Kozma (2020), action feedback and TD-modulated spiking plasticity:
+  <https://arxiv.org/abs/2008.13044>
+- The original recurrent rule is inspired by Florian (2007):
+  <https://florian.io/papers/2007_Florian_Modulated_STDP.pdf>
+
+This implementation is not a reproduction of those papers. The compact motor
+policy is an engineering choice for learnable, CPU-cheap food seeking. It does not
+provide general intelligence, learned vision, planning, or a guarantee of survival
+under arbitrary world settings. See [VALIDATION.md](VALIDATION.md) for controlled
+measurements and their limits.

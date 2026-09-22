@@ -182,6 +182,16 @@ function update() {
   $("firing-rate").textContent = `${b.mean_rate.toFixed(1)} Hz`;
   $("weight-change").textContent = b.weight_change.toFixed(5);
   $("eligibility").textContent = b.eligibility_mean.toFixed(3);
+  $("policy-source").textContent = b.policy.source.startsWith("bundled:")
+    ? "Pretrained"
+    : "From scratch";
+  $("policy-action").textContent = b.policy.action;
+  $("policy-updates").textContent = b.policy.live_updates.toLocaleString();
+  $("policy-exploration").textContent =
+    `${(100 * b.policy.exploration).toFixed(1)}%`;
+  $("policy-td").textContent = b.policy.td_error.toFixed(3);
+  $("policy-base").textContent = b.policy.base_reward.toFixed(3);
+  $("policy-shaping").textContent = b.policy.shaping_reward.toFixed(3);
   retinaCells.forEach((cell, i) => {
     const intensity = w.retina[i];
     cell.style.background =

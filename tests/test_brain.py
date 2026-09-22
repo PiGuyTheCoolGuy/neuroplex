@@ -55,3 +55,15 @@ def test_frozen_synapses_and_inhibitory_sign_survive_activity_and_rewards():
         assert np.all(brain.weights[brain.plastic] <= brain.config.weight_max)
         np.testing.assert_array_equal(original[~brain.plastic], brain.weights[~brain.plastic])
     assert np.isfinite(brain.v).all()
+
+
+def test_motor_policy_cannot_bypass_silent_spiking_actuators():
+    brain = Brain(Config(exploration_floor=0))
+    brain.learning = False
+    brain.policy.values.fill(0)
+    brain.policy.values[:, 0] = 10  # every context selects forward intent
+    brain.refractory[400:] = 10.0  # experimentally silence all motor neurons
+    speed, turn = brain.advance(np.zeros(80))
+    assert brain.policy.action == 0
+    assert speed == 0 and turn == 0
+    assert not brain.rates[400:].any()
