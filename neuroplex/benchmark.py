@@ -13,7 +13,8 @@ from .simulation import Simulation
 
 def train(seed: int, seconds: float, food_count: int = 32, report_progress: bool = False):
     sim = Simulation(Config(seed=seed, food_count=food_count, pretrained_policy=False,
-                            curriculum_enabled=False, memory_enabled=False))
+                            curriculum_enabled=False, memory_enabled=False, world_width=96, world_height=60,
+                            food_regrow_seconds=25, block_count=0))
     started = time.perf_counter()
     for _ in range(round(seconds / sim.config.world_dt)):
         sim.tick()
@@ -37,7 +38,8 @@ def evaluate(seed: int, seconds: float, values: np.ndarray | None, food_count: i
     # Both conditions get identical physics, initial SNN weights, RNG seeds, and
     # food. Only learned action values differ. Reward shaping is disabled here.
     sim = Simulation(Config(seed=seed, food_count=food_count, pretrained_policy=False, shaping_scale=0,
-                            curriculum_enabled=False, memory_enabled=False))
+                            curriculum_enabled=False, memory_enabled=False, world_width=96, world_height=60,
+                            food_regrow_seconds=25, block_count=0))
     sim.brain.learning = False
     if values is not None:
         sim.brain.policy.values[:153] = values

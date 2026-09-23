@@ -14,7 +14,12 @@ from .config import Config
 
 
 ACTION_NAMES = ("Forward", "Curve left", "Curve right", "Turn left", "Turn right", "Backward")
-GOAL_NAMES = ("Food", "Water", "Escape")
+GOAL_NAMES = ("Food", "Water", "Escape", "Build cover")
+ESCAPE_START = 459  # retain all v3 rows verbatim for migration / legacy sensors
+ESCAPE_ROWS = 17 * 3 * 16
+BUILD_START = ESCAPE_START + ESCAPE_ROWS
+BUILD_CONTEXTS = 4 * 5  # cover/contact state × relative bearing of another visible block
+POLICY_ROWS = BUILD_START + 153 * BUILD_CONTEXTS
 # Currents specify a body's motor primitives, never a food-directed action.
 # Columns: forward, backward, left, right; movement still depends on LIF spikes.
 MOTOR_CURRENTS = np.array([
@@ -29,16 +34,16 @@ class MotorPolicy:
     STATE_NAMES = ("state", "action", "pending", "ticks", "discount", "return_sum",
                    "before_potential", "decisions", "updates", "last_td_error",
                    "last_reward", "last_base_reward", "last_shaping", "source", "bootstrap_updates",
-                   "goal", "goal_state", "goal_updates")
+                   "goal", "goal_state", "goal_updates", "risk_scale")
 
     def __init__(self, config: Config):
         self.config = config
         self.rng = np.random.default_rng(config.seed + 2000)
-        self.values = np.zeros((459, 6), dtype=np.float64)
-        self.visits = np.zeros((459, 6), dtype=np.int64)
-        self.goal_values = np.zeros((108, 3), dtype=np.float64)
-        self.goal_visits = np.zeros((108, 3), dtype=np.int64)
-        self.skill_updates = np.zeros(3, dtype=np.int64)
+        self.values = np.zeros((POLICY_ROWS, 6), dtype=np.float64)
+        self.visits = np.zeros((POLICY_ROWS, 6), dtype=np.int64)
+        self.goal_values = np.zeros((108, 4), dtype=np.float64)
+        self.goal_visits = np.zeros((108, 4), dtype=np.int64)
+        self.skill_updates = np.zeros(4, dtype=np.int64)
         self.goal_updates = 0
         self.decisions = 0
         self.updates = 0
@@ -60,7 +65,19 @@ class MotorPolicy:
             self.updates = self.bootstrap_updates = int(data["training"]["updates"])
             self.skill_updates[0] = self.updates
             self.source = "bundled:foraging-v0.2"
+        self.initialize_new_skills()
         self.reset_activity()
+
+    def initialize_new_skills(self):
+        # Preserve old escape experience as a prior in every richer context.
+        # Nothing here encodes an action label or a shelter arrangement.
+        for mask in range(16):
+            old_wall = (1 if mask & 2 else 2) if mask & 1 else 0
+            start = ESCAPE_START + mask * 51
+            self.values[start:start + 51] = self.values[306 + old_wall * 51:306 + (old_wall + 1) * 51]
+        # Explicit transfer: approaching a visible block reuses food navigation.
+        for context in range(BUILD_CONTEXTS):
+            self.values[BUILD_START + context * 153:BUILD_START + (context + 1) * 153] = self.values[:153]
 
     def reset_activity(self):
         self.eligibility = np.zeros_like(self.values)
@@ -78,6 +95,28 @@ class MotorPolicy:
         self.last_reward = 0.0
         self.last_base_reward = 0.0
         self.last_shaping = 0.0
+        self.risk_scale = 1.0
+
+    def encode_motor(self, senses, goal):
+        if len(senses) >= 181 and goal == 2:
+            threat = senses[96:112]
+            brightness = float(threat.max())
+            sector = int(threat.argmax()) if brightness > .001 else 16
+            proximity = int(brightness > .4) + int(brightness > .65)
+            walls = senses[162:178]
+            # Front, left, right, back: sense a dead end before physical contact.
+            mask = sum(int(float(walls[index].max()) > .4) << bit for bit, index in enumerate(
+                ([6, 7, 8, 9], [2, 3, 4, 5], [10, 11, 12, 13], [14, 15, 0, 1])))
+            return ESCAPE_START + mask * 51 + sector * 3 + proximity
+        if len(senses) >= 181 and goal == 3:
+            context = int(senses[178] >= .25) * 2 + int(senses[179] > 0)
+            blocks = senses[146:162]
+            first, second = np.argsort(blocks)[-2:][::-1]
+            relative = (int(second) - int(first) + 8) % 16
+            neighbor = relative // 4 if blocks[second] > .001 else 4
+            context = context * 5 + neighbor
+            return BUILD_START + context * 153 + self.encode(self.target_senses(senses, goal))
+        return goal * 153 + self.encode(self.target_senses(senses, goal))
 
     @staticmethod
     def encode(senses: np.ndarray) -> int:
@@ -101,6 +140,15 @@ class MotorPolicy:
                 potential *= 0.25 + 0.75 * float(senses[32])
                 potential += (0.25 + 0.75 * float(senses[48])) * float(np.max(water * alignment))
             potential -= 1.5 * float(senses[96:112].max())
+        if len(senses) >= 181:
+            threat = senses[96:112]
+            danger = float(threat.max())
+            bearings = (np.arange(16) + .5) * 2 * np.pi / 16 - np.pi
+            away = -float(np.dot(threat, np.cos(bearings))) / max(float(threat.sum()), .001)
+            front = float(senses[168:172].max())
+            # Disclosed shaping prior: distance, open escape direction, and not
+            # facing a nearby obstacle. It never chooses a motor command.
+            potential += danger * (-1.5 + .8 * away * (1 - front) - .6 * front)
         return self.config.shaping_scale * potential
 
     @staticmethod
@@ -111,8 +159,10 @@ class MotorPolicy:
                 result[:16] = np.maximum(senses[:16], senses[112:128])
             elif goal == 1:
                 result[:16] = np.maximum(senses[80:96], senses[128:144])
-            else:
+            elif goal == 2:
                 result[:16] = senses[96:112]
+            elif goal == 3 and len(senses) >= 181:
+                result[:16] = senses[146:162]
         return result
 
     @staticmethod
@@ -123,6 +173,8 @@ class MotorPolicy:
                 available.append(1)
             if senses[96:112].max() > 0.001:
                 available.append(2)
+        if len(senses) >= 181 and senses[180] and senses[146:162].max() > .001:
+            available.append(3)
         return np.asarray(available)
 
     def encode_goal(self, senses):
@@ -145,11 +197,12 @@ class MotorPolicy:
         if not learning:
             # Freezing weights does not remove behavioral exploration. A small,
             # observation-independent floor lets the body escape repeated actions.
-            return self.config.exploration_floor
-        return self._epsilon(self.skill_updates[self.goal], learning)
+            return self.config.exploration_floor * self.risk_scale
+        return self._epsilon(self.skill_updates[self.goal], learning) * self.risk_scale
 
     def begin(self, senses: np.ndarray, learning: bool) -> np.ndarray:
         self.before_potential = self.potential(senses)
+        self.risk_scale = .2 if len(senses) >= 181 and senses[96:112].max() > .65 else 1.0
         if not self.pending:
             previous_goal = self.goal
             self.goal_state = self.encode_goal(senses)
@@ -160,13 +213,16 @@ class MotorPolicy:
                 values = self.goal_values[self.goal_state, available]
                 best = available[values >= values.max() - 1e-10]
                 self.goal = int(self.rng.choice(best))
-                if self.rng.random() < self._epsilon(self.goal_updates, learning):
+                if (previous_goal in available and len(senses) >= 181
+                        and self.goal_values[self.goal_state, previous_goal] >= values.max() - self.config.goal_switch_margin):
+                    self.goal = previous_goal
+                if self.rng.random() < self._epsilon(self.goal_updates, learning) * self.risk_scale:
                     self.goal = int(self.rng.choice(available))
                 if self.goal not in best:
                     self.goal_eligibility.fill(0)
             if self.goal != previous_goal:
                 self.eligibility.fill(0)
-            self.state = self.goal * 153 + self.encode(self.target_senses(senses, self.goal))
+            self.state = self.encode_motor(senses, self.goal)
             candidates = np.flatnonzero(self.values[self.state] >= self.values[self.state].max() - 1e-10)
             greedy = int(self.rng.choice(candidates))
             self.action = greedy
@@ -184,7 +240,7 @@ class MotorPolicy:
 
     def observe(self, senses: np.ndarray, eaten: int, touch: float, alive: bool,
                 learning: bool, water_gain: float = 0.0, damage: float = 0.0,
-                food_gain: float | None = None) -> float | None:
+                food_gain: float | None = None, construction_gain: float = 0.0, pushed: float = 0.0) -> float | None:
         """Reward a transition; update only after the held action finishes."""
         c = self.config
         gamma_tick = c.policy_discount ** (c.world_dt / c.action_seconds)
@@ -192,7 +248,11 @@ class MotorPolicy:
         if len(senses) >= 146 and senses[144] and food_gain is not None:
             food_units = food_gain / c.food_energy
         self.last_base_reward = (c.eating_reward * food_units + c.drinking_reward * water_gain / 24.0
-                                 - damage * 0.5 - 0.2 * c.world_dt - 2.4 * c.world_dt * touch)
+                                 - damage * 0.5 - 0.2 * c.world_dt - 2.4 * c.world_dt * (touch if not pushed else 0))
+        self.last_base_reward += c.construction_reward * construction_gain
+        if len(senses) >= 181:
+            danger = float(senses[96:112].max())
+            self.last_base_reward -= c.world_dt * (3 * danger * danger + 4 * touch * danger)
         if not alive:
             self.last_base_reward -= c.eating_reward
         next_potential = self.potential(senses) if alive else 0.0
@@ -203,7 +263,7 @@ class MotorPolicy:
         self.ticks += 1
         if self.ticks < round(c.action_seconds / c.world_dt) and alive:
             return None
-        next_state = self.goal * 153 + self.encode(self.target_senses(senses, self.goal))
+        next_state = self.encode_motor(senses, self.goal)
         bootstrap = self.discount * float(self.values[next_state].max()) if alive else 0.0
         td = self.return_sum + bootstrap - self.values[self.state, self.action]
         self.last_td_error = float(td)

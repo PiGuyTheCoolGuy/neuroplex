@@ -1,5 +1,8 @@
 # v0.3 design and experimental limits
 
+This describes the v0.3 foundation. v0.4 changes dimensions, resource density,
+observations, policy tables and checkpoints; see [SHELTERS.md](SHELTERS.md).
+
 ## What is programmed, transferred, and learned
 
 The recurrent LIF network keeps the original 500 neurons and 16,000 synapses.

@@ -65,6 +65,9 @@ class Brain:
             # cells; the original 500-neuron topology and memories are retained.
             drive[80:112] += 1.2 * senses[112:144]
             drive[112:144] += 1.2 * senses[80:112]
+        if len(senses) >= 181:
+            drive[144:176] += 1.2 * senses[146:178]
+            drive[176:184] += float(senses[178])
         for i, (_, a, b) in enumerate(GROUPS[-4:]):
             drive[a:b] = self.motor_current[i]
         recurrent = np.bincount(

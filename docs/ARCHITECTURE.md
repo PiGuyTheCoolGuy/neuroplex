@@ -1,5 +1,10 @@
 # Neuroplex architecture
 
+Current v0.4 mechanics and learning extensions are in [SHELTERS.md](SHELTERS.md):
+solid pushable blocks, occlusion, construction credit, obstacle-aware escape,
+isolated escape practice and format-4 migration. The following sections document
+the earlier foundation; their historical table sizes are not current totals.
+
 The v0.3 extension is documented in [ECOSYSTEM.md](ECOSYSTEM.md): water,
 predators, goal learning, sensory memory, curriculum, evaluation and evolution.
 The food-controller foundation below describes v0.2. Its 918-value table is now

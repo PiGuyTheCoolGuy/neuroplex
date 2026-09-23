@@ -15,6 +15,7 @@ from .config import Config
 from .simulation import Simulation
 from .lab import Laboratory
 from .experiments import GENES, copy_model
+from .policy import ESCAPE_START, BUILD_START
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class Runner:
                         destination.flush()
                         os.fsync(destination.fileno())
                     os.replace(temporary, backup)
+                self.sim.expand_habitat()
                 self.sim.save(self.checkpoint)
                 log.info("Migrated checkpoint; original retained at %s", backup)
             self.lab = Laboratory(self.directory)
@@ -214,15 +216,37 @@ class Runner:
     def adopt_champion(self):
         if self.sim.world.alive:
             raise ValueError("A champion can start a new life only after the current creature has died")
-        champion = Simulation.load(self.lab.champion())
+        champion_path = self.lab.champion()
+        champion = Simulation.load(champion_path)
+        practice = champion.brain.policy.source.startswith("escape-practice:")
+        baseline = Simulation.load(champion_path.with_name("source.npz")) if practice else None
         self.sim.save(self.directory / f"checkpoint.before-evolution-life-{self.sim.life}.npz")
         self.sim.new_life()
-        genes = {name: getattr(champion.config, name) for name in GENES}
-        self.sim.config = replace(self.sim.config, **genes)
-        self.sim.brain.config = self.sim.brain.policy.config = self.sim.memory.config = self.sim.config
-        self.sim.world.config = replace(self.sim.world.config, **genes)
-        copy_model(champion, self.sim)
-        self.sim.event("An evolved descendant began a new life; the previous checkpoint was archived.")
+        if practice:
+            # Practice may have run while the main creature kept learning.
+            # Merge only the trained skill/manager entries; never roll back
+            # today's food, water, construction, or recurrent synaptic learning.
+            import numpy as np
+            current, trained, original = self.sim.brain.policy, champion.brain.policy, baseline.brain.policy
+            section = slice(ESCAPE_START, BUILD_START)
+            current.values[section] = trained.values[section]
+            current.visits[section] += np.maximum(0, trained.visits[section] - original.visits[section])
+            changed = trained.goal_values != original.goal_values
+            changed[:, 3] = False
+            current.goal_values[changed] = trained.goal_values[changed]
+            current.goal_visits += np.maximum(0, trained.goal_visits - original.goal_visits)
+            additional = int(trained.skill_updates[2] - original.skill_updates[2])
+            current.skill_updates[2] += additional
+            current.updates += additional
+            current.goal_updates += trained.goal_updates - original.goal_updates
+            current.source = trained.source
+        else:
+            genes = {name: getattr(champion.config, name) for name in GENES}
+            self.sim.config = replace(self.sim.config, **genes)
+            self.sim.brain.config = self.sim.brain.policy.config = self.sim.memory.config = self.sim.config
+            self.sim.world.config = replace(self.sim.world.config, **genes)
+            copy_model(champion, self.sim)
+        self.sim.event("A trained candidate began a new life; the previous checkpoint was archived.")
         self.sim.save(self.checkpoint)
 
     def close(self):

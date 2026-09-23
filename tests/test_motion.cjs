@@ -66,3 +66,12 @@ test('bounds the frame buffer even when the tab is not drawing', () => {
   assert.ok(buffer.frames.length <= 12);
   assert.equal(buffer.sample(10000).x, 99);
 });
+
+test('pushed blocks interpolate while a habitat resize resets old poses', () => {
+  const buffer = new MotionBuffer();
+  buffer.push(frame(0, {blocks: [[10, 20]], width: 96, height: 60}), 0);
+  buffer.push(frame(1, {blocks: [[12, 20]], width: 96, height: 60}), 50);
+  assert.deepEqual(buffer.sample(125).blocks, [[11, 20]]);
+  assert.equal(buffer.push(frame(20, {blocks: [[18, 30]], width: 144, height: 90}), 100), true);
+  assert.equal(buffer.sample(110).x, 20);
+});

@@ -20,7 +20,7 @@ from .curriculum import STAGES, ready_to_advance
 
 
 class Simulation:
-    FORMAT_VERSION = 3
+    FORMAT_VERSION = 4
 
     def __init__(self, config: Config | None = None):
         self.config = config or Config()
@@ -66,7 +66,8 @@ class Simulation:
             self.memory.traces[0] = 0
         next_senses = self.memory.observe(self.world.sense(), self.world.vision_range)
         self.brain.observe(next_senses, outcome["eaten"], self.world.touch, self.world.alive,
-                           water_gain=outcome["water_gain"], damage=outcome["damage"], food_gain=outcome["food_gain"])
+                           water_gain=outcome["water_gain"], damage=outcome["damage"], food_gain=outcome["food_gain"],
+                           construction_gain=outcome["construction_gain"], pushed=outcome["pushed"])
         self.total_drive_reward += outcome["reward"]
         self.total_reward += self.brain.last_reward
         self.ticks += 1
@@ -77,11 +78,15 @@ class Simulation:
             self.event("Drinking at a water source.")
         if outcome["damage"]:
             self.event(f"Predator attack · {outcome['damage']:.0f} health lost.")
+        if outcome["construction_gain"]:
+            self.event(f"Improved physical cover · construction reward {outcome['construction_gain'] * self.config.construction_reward:.2f}.")
         if outcome["died"]:
             self.event(f"Life ended: {self.world.death_reason}. Learned values are preserved.")
             self.life_records.append({"life": self.life, "survival_seconds": self.world.time,
                                       "food": self.world.eaten, "drinks": self.world.drinks,
-                                      "stage": self.world.stage, "cause": self.world.death_reason})
+                                      "stage": self.world.stage, "cause": self.world.death_reason,
+                                      "push_distance": self.world.push_distance,
+                                      "construction_reward_total": self.world.construction_reward_total})
         if self.ticks % round(1 / self.config.world_dt) == 0 or outcome["died"]:
             self.history.append({"time": self.world.time, "energy": self.world.energy,
                                  "hydration": self.world.hydration, "health": self.world.health,
@@ -109,6 +114,9 @@ class Simulation:
                              "reward_per_second": (self.total_reward - first["reward_total"]) / seconds,
                              "reward_total": self.total_reward, "attacks": w.attacks,
                              "updates": self.brain.policy.updates,
+                             "push_distance": w.push_distance, "best_shelter": w.best_shelter,
+                             "construction_reward_total": w.construction_reward_total,
+                             "protected_seconds": w.protected_seconds,
                              "weight_change": float(np.abs(self.brain.weights - self.brain.initial_weights).mean())})
 
     def set_stage(self, stage, automatic=False):
@@ -126,6 +134,31 @@ class Simulation:
         self.world.config = replace(self.world.config, memory_enabled=enabled)
         self.memory.traces.fill(0)
         self.brain.policy.reset_activity()
+
+    def expand_habitat(self):
+        """One-time live-world upgrade; keep the body, clock, learning and needs."""
+        c = self.config
+        new = replace(c, world_width=c.world_width * 1.5, world_height=c.world_height * 1.5,
+                      food_count=max(1, int(c.food_count * .75)) if c.food_count else 0,
+                      water_count=max(1, int(c.water_count * 2 / 3)) if c.water_count else 0,
+                      food_regrow_seconds=max(45.0, c.food_regrow_seconds))
+        w = self.world
+        w.x *= 1.5
+        w.y *= 1.5
+        w.food = w.food[:new.food_count] * 1.5
+        w.regrow_at = w.regrow_at[:new.food_count].copy()
+        w.water = w.water[:new.water_count] * 1.5
+        w.predators *= 1.5
+        w.config = replace(w.config, world_width=new.world_width, world_height=new.world_height,
+                           food_count=new.food_count, water_count=new.water_count,
+                           food_regrow_seconds=new.food_regrow_seconds)
+        self.config = new
+        self.brain.config = self.brain.policy.config = self.memory.config = new
+        self.memory.traces.fill(0)
+        self.brain.policy.reset_activity()
+        w.place_blocks()
+        w.sense()
+        self.event("Habitat expanded 1.5× in each direction; fewer resources, slower regrowth, and movable blocks.")
 
     def new_life(self):
         if self.world.alive:
@@ -226,7 +259,7 @@ class Simulation:
             with np.load(path, allow_pickle=False) as archive:
                 metadata = json.loads(str(archive["metadata"]))
                 version = metadata["version"]
-                if version not in (1, 2, cls.FORMAT_VERSION):
+                if version not in (1, 2, 3, cls.FORMAT_VERSION):
                     raise ValueError("unsupported checkpoint version")
                 config = metadata["config"]
                 if version == 1:
@@ -250,6 +283,13 @@ class Simulation:
                         expected = getattr(sim.brain.policy, name)
                         if version == 2:
                             expected = expected[:153]
+                        elif version == 3:
+                            if name in ("values", "visits", "eligibility"):
+                                expected = expected[:459]
+                            elif name in ("goal_values", "goal_visits", "goal_eligibility"):
+                                expected = expected[:, :3]
+                            else:
+                                expected = expected[:3]
                         if (value.shape != expected.shape or value.dtype != expected.dtype
                                 or not np.isfinite(value).all()):
                             raise ValueError(f"invalid motor policy array: {name}")
@@ -257,11 +297,21 @@ class Simulation:
                             getattr(sim.brain.policy, name)[:153] = value
                             if name == "values":
                                 sim.brain.policy.values[153:306] = value
+                        elif version == 3:
+                            target = getattr(sim.brain.policy, name)
+                            if name in ("values", "visits", "eligibility"):
+                                target[:459] = value
+                            elif name in ("goal_values", "goal_visits", "goal_eligibility"):
+                                target[:, :3] = value
+                            else:
+                                target[:3] = value
                         else:
                             setattr(sim.brain.policy, name, value.copy())
                     required = set(MotorPolicy.STATE_NAMES)
                     if version == 2:
                         required -= {"goal", "goal_state", "goal_updates"}
+                    if version < 4:
+                        required -= {"risk_scale"}
                     if set(metadata["policy"]) != required:
                         raise ValueError("invalid policy metadata fields")
                     for name, value in metadata["policy"].items():
@@ -269,8 +319,8 @@ class Simulation:
                     sim.brain.policy.rng.bit_generator.state = metadata["policy_rng"]
                     if version == 2:
                         sim.brain.policy.skill_updates[0] = sim.brain.policy.updates
-                    if (not 0 <= sim.brain.policy.state < 459 or not 0 <= sim.brain.policy.action < 6
-                            or not 0 <= sim.brain.policy.goal < 3 or not 0 <= sim.brain.policy.goal_state < 108):
+                    if (not 0 <= sim.brain.policy.state < len(sim.brain.policy.values) or not 0 <= sim.brain.policy.action < 6
+                            or not 0 <= sim.brain.policy.goal < 4 or not 0 <= sim.brain.policy.goal_state < 108):
                         raise ValueError("invalid policy state or action")
                 else:
                     # Preserve the recurrent memories. The new motor interface
@@ -283,7 +333,10 @@ class Simulation:
                     if not np.isfinite(value):
                         raise ValueError("non-finite world state")
                     setattr(sim.world, key, value)
-                for key in World.ARRAY_NAMES if version >= 3 else ("food", "regrow_at", "retina"):
+                world_arrays = World.ARRAY_NAMES if version >= 3 else ("food", "regrow_at", "retina")
+                if version < 4:
+                    world_arrays = tuple(k for k in world_arrays if k not in ("blocks", "block_retina", "obstacle_retina", "block_cover_best"))
+                for key in world_arrays:
                     value = archive["world_" + key]
                     if value.shape != getattr(sim.world, key).shape or not np.isfinite(value).all():
                         raise ValueError(f"invalid world array: {key}")
@@ -323,8 +376,12 @@ class Simulation:
                     sim.total_reward = 0.0
                     sim.brain.last_reward = 0.0
                 if version < cls.FORMAT_VERSION:
+                    sim.brain.policy.initialize_new_skills()
+                    sim.brain.policy.reset_activity()
+                    sim.world.place_blocks()
+                    sim.world.sense()
                     sim.migrated_from = version
-                    sim.event(f"Upgraded v{version} save: preserved food learning and world; curriculum starts gently.")
+                    sim.event(f"Upgraded v{version} save: preserved learned values; added obstacle-aware escape and construction.")
                 return sim
         except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile) as exc:
             raise ValueError(f"Cannot load checkpoint {path}: {exc}. The file was not overwritten.") from exc

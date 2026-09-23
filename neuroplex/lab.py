@@ -10,14 +10,15 @@ import time
 from typing import Literal
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .experiments import atomic_json
 
 
 class ExperimentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    kind: Literal["evaluate", "evolve"] = "evaluate"
+    kind: Literal["evaluate", "evolve", "escape"] = "evaluate"
+    episodes: int = Field(default=40, ge=1, le=200)
     stage: int = Field(default=0, ge=0, le=4)
     seconds: float = Field(default=60.0, ge=5, le=600)
     evaluation_seconds: float = Field(default=30.0, ge=5, le=300)
@@ -25,6 +26,14 @@ class ExperimentRequest(BaseModel):
     population: int = Field(default=4, ge=2, le=8)
     generations: int = Field(default=3, ge=1, le=10)
     seed: int = Field(default=9001, ge=0, le=2**32 - 1)
+
+    @model_validator(mode="after")
+    def practice_bounds(self):
+        if self.kind == "escape":
+            self.stage = 3
+            if self.seconds > 60:
+                raise ValueError("Escape practice episodes must be 5–60 seconds")
+        return self
 
 
 class Laboratory:
@@ -134,7 +143,7 @@ class Laboratory:
     def champion(self):
         self.refresh(force=True)
         if self.running() or not self.champion_id:
-            raise ValueError("Finish an evolution experiment first")
+            raise ValueError("Finish evolution or escape practice first")
         path = self.directory / self.champion_id / "champion.npz"
         if not path.is_file():
             raise ValueError("No completed generation has produced a champion")

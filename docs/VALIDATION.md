@@ -1,5 +1,9 @@
 # Learning validation
 
+Current block physics, escape practice, migration and browser checks are in
+[VALIDATION-v0.4.md](VALIDATION-v0.4.md). Older habitat measurements below use older
+geometry/resource defaults and are not directly comparable to the expanded world.
+
 Automatic-life and streaming verification is in [VALIDATION-v0.3.1.md](VALIDATION-v0.3.1.md).
 Ecosystem verification is in [VALIDATION-v0.3.md](VALIDATION-v0.3.md).
 The historical v0.2 measurements below apply to food-only foraging, not to the new

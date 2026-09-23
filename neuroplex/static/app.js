@@ -143,8 +143,14 @@ $("adopt-champion").onclick = () => control("adopt_champion");
 $("trend-metric").onchange = () => state && drawTrends();
 $("experiment-kind").onchange = () => {
   const evolving = $("experiment-kind").value === "evolve";
+  const escape = $("experiment-kind").value === "escape";
   document.querySelectorAll(".evolution-field").forEach((field) => (field.hidden = !evolving));
   document.querySelectorAll(".evaluation-field").forEach((field) => (field.hidden = evolving));
+  document.querySelectorAll(".escape-field").forEach((field) => (field.hidden = !escape));
+  $("escape-help").hidden = !escape;
+  $("experiment-stage").disabled = escape;
+  if (escape) { $("experiment-stage").value = "3"; $("experiment-seconds").value = "12"; }
+  $("experiment-seconds").max = escape ? "60" : "600";
 };
 $("experiment-form").onsubmit = async (event) => {
   event.preventDefault();
@@ -155,6 +161,7 @@ $("experiment-form").onsubmit = async (event) => {
     seconds: Number($("experiment-seconds").value), seed: Number($("experiment-seed").value),
     trials: Number($("experiment-trials").value), population: Number($("experiment-population").value),
     generations: Number($("experiment-generations").value), evaluation_seconds: Number($("experiment-eval-seconds").value),
+    episodes: Number($("experiment-episodes").value),
   };
   try {
     const response = await fetch("/api/experiments", {method: "POST", headers: {
@@ -251,6 +258,10 @@ function updateLifecycle() {
 function update() {
   const w = state.world,
     b = state.brain;
+  $("world-dimensions").textContent = `${w.width} × ${w.height}`;
+  $("construction-status").textContent = w.blocks.length
+    ? `${w.blocks.length} movable blocks · ${w.push_distance.toFixed(1)} units pushed · ${w.construction_reward_total.toFixed(2)} building reward earned · ${w.protected_seconds.toFixed(1)}s screened from predators`
+    : "Food-only warm-up. Blocks appear from stage 2 (Scarce food).";
   updateLifecycle();
   document
     .querySelectorAll("[data-speed]")
@@ -306,7 +317,7 @@ function update() {
   $("firing-rate").textContent = `${b.mean_rate.toFixed(1)} Hz`;
   $("weight-change").textContent = b.weight_change.toFixed(5);
   $("eligibility").textContent = b.eligibility_mean.toFixed(3);
-  $("policy-source").textContent = b.policy.source.startsWith("evolution:") ? "Evolved" : b.policy.source.startsWith("bundled:") ? "Pretrained food skill" : "From scratch";
+  $("policy-source").textContent = b.policy.source.startsWith("escape-practice:") ? "Escape practice" : b.policy.source.startsWith("evolution:") ? "Evolved" : b.policy.source.startsWith("bundled:") ? "Pretrained food skill" : "From scratch";
   $("policy-action").textContent = b.policy.action;
   $("policy-goal").textContent = b.policy.goal;
   $("goal-updates").textContent = b.policy.goal_updates.toLocaleString();
@@ -371,13 +382,14 @@ function updateLab() {
   if (current.generation) parts.push(`generation ${current.generation}/${current.request.generations}`);
   if (current.candidate) parts.push(`candidate ${current.candidate}/${current.request.population}`);
   if (current.trial) parts.push(`world ${current.trial}`);
+  if (current.episode) parts.push(`episode ${current.episode}/${current.request.episodes}`);
   if (current.episode_seconds != null) parts.push(`${current.episode_seconds.toFixed(1)} simulated seconds`);
   $("lab-progress").textContent = current.error || parts.join(" · ");
   const result = current.summary;
   $("lab-result").textContent = result
-    ? `${current.kind === "evolve" ? "Unseen audit" : "Frozen evaluation"}: ${result.survived}/${result.trials} survived the full trial · ${result.mean_food_per_minute.toFixed(1)} food/min · ${result.mean_survival_seconds.toFixed(1)}s mean survival · ${result.mean_damage.toFixed(1)} mean damage.`
+    ? `${current.kind === "escape" ? "Escape audit" : current.kind === "evolve" ? "Unseen audit" : "Frozen evaluation"}: ${result.survived}/${result.trials} survived the full trial · ${result.mean_food_per_minute.toFixed(1)} food/min · ${result.mean_survival_seconds.toFixed(1)}s mean survival · ${result.mean_damage.toFixed(1)} mean damage.`
     : "";
-  if (current.baseline_audit) $("lab-result").textContent += ` Starting model: ${current.baseline_audit.summary.survived}/${current.baseline_audit.summary.trials} survived those same audit worlds.`;
+  if (current.baseline_audit) $("lab-result").textContent += ` Starting model: ${current.baseline_audit.summary.survived}/${current.baseline_audit.summary.trials} survived those same audit worlds, ${current.baseline_audit.summary.mean_damage.toFixed(1)} mean damage.`;
   $("download-result").hidden = current.state !== "completed";
   $("evolution-chart").hidden = !current.generations?.length;
   if (current.generations?.length) drawChart("evolution-chart", current.generations, [{key: "best_fitness", color: "#b6a1e9"}], "generation");
@@ -467,6 +479,15 @@ function drawWorld(w) {
     ctx.lineWidth = 0.12;
     ctx.stroke();
   }
+  for (const [x, y] of w.blocks || []) {
+    const half = w.block_size / 2;
+    ctx.fillStyle = "#8e7354";
+    ctx.fillRect(x - half, y - half, w.block_size, w.block_size);
+    ctx.strokeStyle = "#d3b583";
+    ctx.lineWidth = .15;
+    ctx.strokeRect(x - half, y - half, w.block_size, w.block_size);
+    ctx.beginPath(); ctx.moveTo(x - half + .3, y - half + .4); ctx.lineTo(x + half - .3, y - half + .4); ctx.stroke();
+  }
   for (const predator of w.predators) {
     ctx.save();
     ctx.translate(predator.x, predator.y);
@@ -548,7 +569,7 @@ function drawTrends() {
   const key = $("trend-metric").value;
   drawChart("trends", state.metrics, [{key, color: "#86e9c5"}]);
   const last = state.latest_metric;
-  $("trend-current").textContent = last ? last[key].toFixed(key === "weight_change" ? 5 : 2) : "Waiting for samples";
+  $("trend-current").textContent = Number.isFinite(last?.[key]) ? last[key].toFixed(key === "weight_change" ? 5 : 2) : "Waiting for samples";
   if (state.metrics.length) $("trend-caption").textContent = `${clock(state.metrics[0].time)} — ${clock(last.time)} total simulated time · up to 6 hours`;
 }
 function drawChart(id, data, series, xKey = "time", fixedMax = null) {

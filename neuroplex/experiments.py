@@ -19,6 +19,7 @@ import time
 import numpy as np
 
 from .simulation import Simulation
+from .policy import ESCAPE_START, BUILD_START
 
 STRUCTURE = ("pre", "post", "inhibitory", "plastic", "weights", "initial_weights")
 LEARNED = ("values", "visits", "goal_values", "goal_visits", "skill_updates")
@@ -95,6 +96,70 @@ def run_episode(sim, seconds, progress=None):
             "shaping_enabled": sim.config.shaping_scale > 0,
             "exploration_floor": sim.config.exploration_floor,
             "wall_seconds": time.monotonic() - started}
+
+
+def escape_trial(source, seed, learning):
+    """Curriculum scenarios, not demonstrations: wall/corner starts, random heading."""
+    config = replace(source.config, seed=seed, food_count=0, water_enabled=False,
+                     predator_count=1, block_count=0, habitat_stage=3, curriculum_enabled=False,
+                     shaping_scale=source.config.shaping_scale if learning else 0.0)
+    trial = Simulation(config)
+    copy_model(source, trial)
+    trial.brain.learning = learning
+    trial.auto_life = trial.auto_evaluate = False
+    rng = np.random.default_rng(seed + 6000)
+    w = trial.world
+    margin = float(rng.uniform(3.5, 6))
+    positions = [(margin, margin), (config.world_width - margin, margin),
+                 (margin, config.world_height - margin), (config.world_width - margin, config.world_height - margin),
+                 (margin, config.world_height / 2), (config.world_width / 2, margin),
+                 (config.world_width - margin, config.world_height / 2), (config.world_width / 2, config.world_height - margin)]
+    w.x, w.y = positions[int(rng.integers(len(positions)))]
+    w.heading = float(rng.uniform(-np.pi, np.pi))
+    inward = np.array([config.world_width / 2 - w.x, config.world_height / 2 - w.y])
+    inward /= np.linalg.norm(inward)
+    w.predators[0] = np.array([w.x, w.y]) + inward * rng.uniform(7, 12)
+    w.predator_ready_at[0] = 0
+    w.sense()
+    return trial
+
+
+def escape_practice(source, request, directory, report):
+    """Train copies; retain food/water/build tables and recurrent weights exactly.
+
+    Only obstacle-aware escape values and goal selection transfer back to the
+    candidate. No correct actions, path planner, or steering rule supplies labels.
+    Independent frozen audit seeds are never used to choose a candidate.
+    """
+    learner = fresh_trial(source, request["seed"], source.world.stage, learning=True)
+    seconds = min(60.0, request["seconds"])
+    for episode in range(request["episodes"]):
+        if CANCELLED.is_set():
+            raise InterruptedError("Experiment cancelled")
+        report({"phase": "wall and corner escape practice", "episode": episode + 1}, force=True)
+        trial = escape_trial(learner, request["seed"] + episode * 101, learning=True)
+        run_episode(trial, seconds, lambda age: report({"episode_seconds": age}))
+        previous_updates = int(learner.brain.policy.skill_updates[2])
+        for name in ("values", "visits"):
+            getattr(learner.brain.policy, name)[ESCAPE_START:BUILD_START] = getattr(trial.brain.policy, name)[ESCAPE_START:BUILD_START]
+        for name in ("goal_values", "goal_visits"):
+            getattr(learner.brain.policy, name)[:] = getattr(trial.brain.policy, name)
+        learner.brain.policy.skill_updates[2] = trial.brain.policy.skill_updates[2]
+        learner.brain.policy.updates += int(trial.brain.policy.skill_updates[2]) - previous_updates
+        learner.brain.policy.goal_updates = trial.brain.policy.goal_updates
+    learner.brain.policy.source = f"escape-practice:{request['episodes']}"
+    seeds = [request["seed"] + 3_000_001 + i * 103 for i in range(request["trials"])]
+    reports = []
+    for model in (source, learner):
+        records = []
+        for i, seed in enumerate(seeds):
+            report({"phase": "frozen escape audit", "trial": i + 1}, force=True)
+            records.append(run_episode(escape_trial(model, seed, learning=False), seconds))
+        reports.append({"seeds": seeds, "trials": records, "summary": aggregate(records)})
+    learner.save(directory / "champion.npz")
+    return {"summary": reports[1]["summary"], "audit": reports[1], "baseline_audit": reports[0],
+            "champion_available": True, "episodes": request["episodes"], "seconds_per_episode": seconds,
+            "method": "Online escape and goal learning in wall/corner scenarios; food, water, construction and SNN weights retained; no action labels"}
 
 
 def aggregate(records):
@@ -211,6 +276,8 @@ def execute(request, source_path, directory):
             result = evaluate(source, request["seconds"], seeds, request["stage"],
                               lambda trial, age: report({"phase": "frozen evaluation", "trial": trial + 1,
                                                           "episode_seconds": age}))
+        elif request["kind"] == "escape":
+            result = escape_practice(source, request, directory, report)
         else:
             result = evolve(source, request, directory, report)
         atomic_json(directory / "result.json", result)

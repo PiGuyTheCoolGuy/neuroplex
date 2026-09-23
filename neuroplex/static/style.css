@@ -346,6 +346,7 @@ canvas {
 }
 .legend-water { background: #70b5df; }
 .legend-predator { background: #ed8f89; }
+.legend-block { background: #c6a16c; border-radius: 1px !important; }
 .legend { flex-wrap: wrap; }
 .panel-body { padding: 0 19px 18px; }
 .panel-body.compact { padding-bottom: 8px; }

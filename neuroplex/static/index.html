@@ -17,7 +17,7 @@
     <header class="topbar">
       <a class="brand" href="/" aria-label="Neuroplex home"
         ><span class="brand-icon">N</span> neuroplex<span class="version"
-          >/ 0.3.1</span
+          >/ 0.4</span
         ></a
       >
       <div class="top-note">ARTIFICIAL LIFE LABORATORY</div>
@@ -75,7 +75,7 @@
                 height="600"
                 aria-label="Live habitat: the creature, food, movement trail, and visual field"
               ></canvas>
-              <div class="world-corner">BOUNDED WORLD <span>96 × 60</span></div>
+              <div class="world-corner">BOUNDED WORLD <span id="world-dimensions">144 × 90</span></div>
               <div id="death-overlay" class="death-overlay" hidden>
                 <div>
                   <span class="eyebrow">LIFE ENDED</span>
@@ -93,6 +93,7 @@
               ><span><i class="legend-food"></i> Food</span
               ><span><i class="legend-water"></i> Water</span
               ><span><i class="legend-predator"></i> Predator</span
+              ><span><i class="legend-block"></i> Movable block</span
               ><span><i class="legend-vision"></i> Visual field</span
               ><label
                 ><input id="show-vision" type="checkbox" checked /> Show
@@ -105,6 +106,10 @@
               <span class="quiet">Keeps learning · Pause holds the countdown</span>
             </div>
             <p id="stream-status" class="stream-status">Live state stream · smooth local rendering</p>
+            <div class="panel-body compact">
+              <p id="construction-status" class="help">Blocks appear from stage 2. Pushing and arranging cover are learning tasks.</p>
+              <p class="help">Blocks stop movement and line of sight. Useful cover needs an exit; touching a block earns no bonus. Building skill starts inexperienced.</p>
+            </div>
           </section>
           <div class="metric-grid">
             <div class="metric">
@@ -155,7 +160,18 @@
           <section class="panel trends-panel">
             <div class="panel-heading"><h2>Learning over hours</h2><a href="/api/metrics.csv" class="download">Export CSV</a></div>
             <div class="panel-body compact"><label class="field">Measure
-              <select id="trend-metric"><option value="food_per_minute">Food per simulated minute</option><option value="drinks_per_minute">Drinks per simulated minute</option><option value="reward_per_second">Reward per simulated second</option><option value="energy">Energy</option><option value="hydration">Hydration</option><option value="health">Health</option><option value="updates">Learning updates</option><option value="weight_change">Synaptic change</option></select>
+              <select id="trend-metric">
+                <option value="food_per_minute">Food per simulated minute</option>
+                <option value="drinks_per_minute">Drinks per simulated minute</option>
+                <option value="reward_per_second">Reward per simulated second</option>
+                <option value="energy">Energy</option><option value="hydration">Hydration</option>
+                <option value="health">Health</option><option value="updates">Learning updates</option>
+                <option value="weight_change">Synaptic change</option>
+                <option value="push_distance">Block distance pushed</option>
+                <option value="construction_reward_total">Building reward earned</option>
+                <option value="best_shelter">Best cover score</option>
+                <option value="protected_seconds">Time screened from predators</option>
+              </select>
             </label></div>
             <canvas id="trends" height="170" aria-label="Selected learning measure over up to six simulated hours"></canvas>
             <div class="chart-caption"><span id="trend-caption">One sample every 5 simulated seconds · up to 6 hours</span><span id="trend-current">—</span></div>
@@ -167,7 +183,8 @@
               <p class="help">Experiments use copies of this creature. Frozen trials disable learning and shaping rewards. Evolution trains and selects a small population, then audits its winner on new worlds.</p>
               <form id="experiment-form">
                 <div class="form-grid">
-                  <label class="field">Experiment<select id="experiment-kind"><option value="evaluate">Frozen evaluation</option><option value="evolve">Evolution</option></select></label>
+                  <label class="field">Experiment<select id="experiment-kind"><option value="evaluate">Frozen evaluation</option><option value="evolve">Evolution</option><option value="escape">Escape practice · walls & corners</option></select></label>
+                  <label class="field escape-field" hidden>Practice episodes<input id="experiment-episodes" type="number" min="1" max="200" value="40" required></label>
                   <label class="field">Test habitat<select id="experiment-stage"><option value="0">Foraging</option><option value="1">Scarce food</option><option value="2">Food and water</option><option value="3">First predator</option><option value="4">Wild habitat</option></select></label>
                   <label class="field">Seconds per world<input id="experiment-seconds" type="number" min="5" max="600" value="60" required></label>
                   <label class="field">Random seed<input id="experiment-seed" type="number" min="0" max="4294967295" value="9001" required></label>
@@ -183,8 +200,9 @@
               <p id="lab-result" class="lab-result" role="status"></p>
               <a id="download-result" href="/api/experiments/result" class="download" hidden>Download detailed results</a>
               <canvas id="evolution-chart" height="120" aria-label="Best fitness across generations" hidden></canvas>
-              <button id="adopt-champion" type="button" disabled>Start next life with evolved champion</button>
-              <p class="help">Adoption is available after the main creature dies. It archives that creature's checkpoint. Evolution inherits learned values as well as mutations.</p>
+              <p id="escape-help" class="help" hidden>Practice runs a copy near walls and corners, then compares it with the starting brain on new frozen trials. Food, water, building values and synapses stay intact. Try 40 episodes × 12 seconds; compare damage, not just survival.</p>
+              <button id="adopt-champion" type="button" disabled>Start next life with trained candidate</button>
+              <p class="help">Pause or turn off automatic lives before adopting a candidate after death. Adoption archives the current brain and uses the candidate's saved learning; compare its audit first.</p>
               <div id="evaluation-history" class="evaluation-history"></div>
             </div>
           </section>
@@ -319,7 +337,7 @@
               ><strong id="policy-shaping">0.000</strong>
             </div>
             <p class="help">
-              Learned goal values choose food, water, or escape. Learned motor values drive spiking neurons. Memory is an engineered sensory trace.
+              Learned goal values choose food, water, escape, or building cover. Learned motor values drive spiking neurons. Memory is an engineered sensory trace.
             </p>
           </section>
           <div class="experiment-note">

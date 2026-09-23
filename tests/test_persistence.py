@@ -105,7 +105,11 @@ def test_v1_upgrade_keeps_world_memories_and_an_original_backup(tmp_path, alive)
     original_bytes = path.read_bytes()
     runner = Runner(tmp_path)
     try:
-        assert runner.sim.world.summary() == original_world
+        assert runner.sim.world.x == original_world["x"] * 1.5
+        assert runner.sim.world.time == original_world["time"]
+        assert runner.sim.world.energy == original_world["energy"]
+        assert runner.sim.world.alive == original_world["alive"]
+        assert runner.sim.world.config.world_width == original_world["width"] * 1.5
         np.testing.assert_array_equal(runner.sim.brain.weights, original_weights)
         assert runner.sim.paused
         assert runner.sim.brain.policy.bootstrap_updates == 2400
@@ -141,7 +145,7 @@ def test_v2_upgrade_keeps_food_values_mid_action_and_archives_original(tmp_path)
         metadata[key] = {k: v for k, v in metadata[key].items() if k in allowed}
     for key in ("values", "visits", "eligibility"):
         data["policy_" + key] = data["policy_" + key][:153]
-    metadata["policy"] = {k: v for k, v in metadata["policy"].items() if k not in ("goal", "goal_state", "goal_updates")}
+    metadata["policy"] = {k: v for k, v in metadata["policy"].items() if k not in ("goal", "goal_state", "goal_updates", "risk_scale")}
     metadata["world"] = {k: v for k, v in metadata["world"].items()
                          if k in ("time", "x", "y", "heading", "energy", "alive", "eaten", "distance", "touch", "speed", "turn")}
     metadata["simulation"] = {k: v for k, v in metadata["simulation"].items()
@@ -156,8 +160,7 @@ def test_v2_upgrade_keeps_food_values_mid_action_and_archives_original(tmp_path)
         np.testing.assert_array_equal(resumed.brain.policy.values[:153], original_values)
         np.testing.assert_array_equal(resumed.brain.policy.values[153:306], original_values)
         np.testing.assert_array_equal(resumed.brain.weights, original_weights)
-        assert resumed.brain.policy.pending == sim.brain.policy.pending
-        assert resumed.brain.policy.ticks == sim.brain.policy.ticks
+        assert not resumed.brain.policy.pending  # geometry/observation change starts fresh action credit
         assert resumed.world.energy == sim.world.energy and resumed.world.time == sim.world.time
         assert resumed.paused and not resumed.brain.learning
         assert resumed.stage_started == sim.world.time

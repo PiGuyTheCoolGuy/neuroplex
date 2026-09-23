@@ -53,7 +53,7 @@ def test_stage_changes_food_visibility_without_deleting_or_resetting_resources()
     w.regrow_at[0] = 25
     energy = w.energy
     w.set_stage(4)
-    assert w.food_limit == 26 and w.predator_limit == 2 and w.water_active
+    assert w.food_limit == 20 and w.predator_limit == 2 and w.water_active
     assert w.vision_range < w.config.vision_range
     np.testing.assert_array_equal(food, w.food)
     assert w.regrow_at[0] == 25 and w.energy == energy
@@ -85,15 +85,15 @@ def test_goal_choice_is_learned_not_a_fixed_thirst_or_escape_reflex():
     senses[8] = senses[88] = 0.8
     senses[100] = 0.9
     state = policy.encode_goal(senses)
-    policy.goal_values[state] = [30, 20, 10]
+    policy.goal_values[state, :3] = [30, 20, 10]
     policy.begin(senses, False)
     assert policy.goal == 0  # even while very thirsty and threatened
     policy.reset_activity()
-    policy.goal_values[state] = [10, 30, 20]
+    policy.goal_values[state, :3] = [10, 30, 20]
     policy.begin(senses, False)
     assert policy.goal == 1
     policy.reset_activity()
-    policy.goal_values[state] = [10, 20, 30]
+    policy.goal_values[state, :3] = [10, 20, 30]
     policy.begin(senses, False)
     assert policy.goal == 2
 

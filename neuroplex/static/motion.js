@@ -12,6 +12,7 @@ class MotionBuffer {
     const previous = this.frames.at(-1);
     const reset = !previous || previous.frame.life !== frame.life ||
       previous.frame.world.stage !== frame.world.stage ||
+      previous.frame.world.width !== frame.world.width || previous.frame.world.height !== frame.world.height ||
       previous.frame.paused !== frame.paused || previous.frame.speed !== frame.speed ||
       previous.frame.world.alive !== frame.world.alive ||
       frame.world.time < previous.frame.world.time || at - previous.at > 1000;
@@ -37,6 +38,8 @@ class MotionBuffer {
     return {...(t < 1 ? a : b), ...pose(a, b), time: mix(a.time, b.time),
       // Resources do not slide when eaten or regrown; only bodies interpolate.
       food: t < 1 ? a.food : b.food, water: t < 1 ? a.water : b.water,
+      blocks: a.blocks && b.blocks && a.blocks.length === b.blocks.length
+        ? a.blocks.map((p, i) => [mix(p[0], b.blocks[i][0]), mix(p[1], b.blocks[i][1])]) : b.blocks,
       predators: a.predators.length === b.predators.length
         ? a.predators.map((p, i) => ({...(t < 1 ? p : b.predators[i]), ...pose(p, b.predators[i])})) : b.predators};
   }

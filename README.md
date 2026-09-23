@@ -1,15 +1,16 @@
 # Neuroplex
 
-**One creature learning to find food, drink water, and survive predators.**
+**One creature learning to forage, evade predators, and arrange blocks into cover.**
 
-Neuroplex v0.3.1 is a CPU-only artificial-life experiment for Ubuntu 24.04. A Python
+Neuroplex v0.4 is a CPU-only artificial-life experiment for Ubuntu 24.04. A Python
 process runs the world continuously; your laptop's browser displays it. Closing the
 browser does not stop the simulation. There is no GPU, cloud model, PyTorch, Node.js
 build, or paid API to configure.
 
 The brain has **500 leaky integrate-and-fire neurons and 16,000 sparse synapses**,
-plus **3,078 learned values**: three motor skill tables and a goal-choice table.
-This is a hybrid: learned values choose food, water, or escape and a motor intent;
+plus **26,442 stored action/goal values**, including the preserved legacy escape
+table and new obstacle-aware escape/construction contexts.
+This is a hybrid: learned values choose food, water, escape or building and a motor intent;
 spiking neurons produce movement. Recurrent STDP and value learning continue during its life.
 There is no backpropagation, action teacher, or replay buffer. After death, the live
 habitat can automatically start a fresh body while retaining the learned brain.
@@ -36,11 +37,16 @@ systemctl --user start neuroplex
 ```
 
 If running in the foreground, use Ctrl+C before updating, then `bash start.sh`.
-Refresh the browser (Ctrl+F5). Your world, food experience, recurrent weights, and pause /
-learning settings are preserved. When upgrading a v1/v2 save, the original is retained as
-`data/checkpoint.v1.npz` or `data/checkpoint.v2.npz`. Difficulty starts at the food
-stage and waits for a fresh performance window before advancing. Existing v3 saves
-keep their habitat stage. **Auto-start next life is on by default, with a 10-real-second
+Refresh the browser (Ctrl+F5). **The live habitat expands once: 1.5× each dimension,
+25% fewer food patches, one-third fewer water sources, and at least 45-second food
+regrowth.** The standard 96×60 world becomes 144×90. Coordinates scale proportionally;
+the creature keeps its age, energy, hydration, health, learned values, recurrent
+weights and pause/freeze settings. New materials are added. Old checkpoints are
+archived as `data/checkpoint.v1.npz`, `.v2.npz`, or `.v3.npz` before writing format 4.
+Old sensory/action credit traces restart because the geometry changed. Existing
+v3 worlds keep their habitat stage; v1/v2 start at the gentle food stage.
+This expansion does not repeat on later restarts. **Auto-start next life is on by
+default, with a 10-real-second
 delay**, including older saves with no setting yet. A saved pause holds that countdown;
 press Resume to continue. A saved learning-freeze setting also stays frozen until
 you turn learning back on. Neither update nor respawn discards learned weights.
@@ -53,6 +59,10 @@ Git may ask you to commit or stash the edit before pulling. Keep your changes.
 
 | Feature | Behavior |
 | --- | --- |
+| Larger, scarcer habitat | 144×90 by default; 48 food patches, 8 water sources, 45-second regrowth; stage modifiers make resources scarcer still |
+| Building materials | 24 pushable solid blocks from stage 2; blocks stop bodies and sight lines; learned building goal and rewards for improved cover with exits |
+| Escape decisions | Earlier 360° obstacle sensing, joint wall/corner/threat states, reduced near-danger exploration and a margin before switching goals |
+| Escape practice | Bounded wall/corner drills on a copy, independent frozen audit and optional selective adoption after death |
 | Automatic next life | On by default; 10 real seconds after death, adjustable 1–300; keeps learned synapses, skill/goal values, difficulty, and lifetime records |
 | Smooth live view | 20 Hz geometry stream, browser animation targeting 60 fps, 100 ms interpolation buffer; no video encoder or extra dependencies |
 | Learning history | Five-second samples; six simulated hours of food/drink rates, energy, hydration, health, reward and learning updates; CSV export |
@@ -84,11 +94,52 @@ training time for each mutated descendant; the separate selection/audit field se
 the frozen trial length. This can take several minutes on an older CPU. The result
 compares the evolved winner and starting model on the same final audit worlds.
 Improvement is not guaranteed. After the main creature dies, **Start next life with
-evolved champion** imports the winner and its learning parameters, archiving the old
+trained candidate** imports the evolution winner and its learning parameters, archiving the old
 creature as `checkpoint.before-evolution-life-N.npz`. Ordinary **Start new life** keeps
 the main creature's own learning instead. **Pause or turn off Auto-start next life**
 if you want time to inspect a death or adopt a champion. Champion adoption is always
 manual; automatic next lives never import an evolution result.
+
+## Blocks, shelters, and escape practice
+
+Select **2 · Scarce food** or a later habitat stage to see the brown blocks.
+The creature can push them with its body, at 40% normal movement speed. Blocks cannot
+pass through each other, leave the map, or bury food/water. Predators cannot push
+them, see through them or attack through them. A wall/corner made of blocks can
+therefore provide real cover. The creature still needs a way out to forage and drink.
+
+The new **Build cover** goal learns motor choices using material bearings, another
+visible block's relative direction, contact and local cover. Approaching a block
+transfers food-navigation experience; no layout, U-shaped shelter, or correct push
+sequence is programmed. An explicit geometric reward measures added cover from
+multiple blocks with room to exit. It rewards new improvements per material; merely
+touching blocks or repeatedly restoring the same arrangement does not earn more.
+The dashboard distinguishes distance pushed from **building reward actually earned**.
+
+**This is a shelter-building foundation, not a reliable architect.** A short test
+showed pushing and improvements to the cover score, not a finished learned house.
+There are no roofs, doors, object grasping, long-term site memory or construction
+plans yet. Blocks and their arrangement survive service restarts. As before, a
+new life creates a fresh world, so it does not inherit the previous life's buildings.
+
+To work on cornering and hesitation:
+
+1. In **Evaluation & evolution**, choose **Escape practice · walls & corners**.
+2. Start with **40 episodes**, **12 seconds per world**, and **3–5 evaluation worlds**.
+   Episodes are limited to 5–60 seconds, with 1–200 episodes and one low-priority CPU worker.
+3. Compare the candidate's **mean damage** against the starting model on the same
+   unseen frozen worlds. Both may survive a short test while one suffers more attacks.
+4. If the result is useful, pause or disable automatic lives before the next death,
+   then choose **Start next life with trained candidate**. Escape-practice adoption
+   merges the new escape values and changed goal entries while preserving the live
+   creature's latest food, water, building and recurrent synaptic learning, including
+   learning that happened while practice was running. The old checkpoint is archived.
+
+Practice supplies challenging scenarios, not teacher actions. More detailed wall
+states, reward shaping and reduced random exploration help learning, but the policy
+can still make bad decisions. In one five-world check, 40 practice episodes reduced
+mean damage from **27 to 15**. That is limited evidence, not a survival guarantee.
+[Design and limits](docs/SHELTERS.md) and [validation](docs/VALIDATION-v0.4.md) give details.
 
 ## Automatic lives and smooth viewing
 
@@ -96,7 +147,7 @@ Under the habitat, **Auto-start next life** lets it continue unattended, even wi
 no browser connected. Its death and final learning are recorded before respawn.
 The fresh body/world has a new seed; learned synapses, food/water/escape values,
 goal values, exploration experience, learning on/frozen state, current habitat stage,
-and long-term metrics survive. Short-lived sensory traces and neural activity reset.
+and long-term metrics survive, including construction values. Short-lived sensory traces and neural activity reset.
 This does not make it invincible or guarantee that it learns predator avoidance.
 
 The delay is **real seconds**, unaffected by 1×–10× simulation speed. Pause freezes
@@ -108,7 +159,7 @@ and evolution trials continue to end at death; they do not respawn within a tria
 
 The browser receives small motion frames over the existing WebSocket and draws
 intermediate positions locally. This is live **state streaming**, not video. Creature
-and predator movement interpolate; food does not slide around, and the view never
+and predator movement, and pushed blocks, interpolate; food does not slide around, and the view never
 predicts movement beyond the latest received position. Death, pause, new lives,
 stage changes and reconnects reset the interpolation buffer. Brain/vital readouts
 refresh at 5 Hz; graphs at most once a second, with long-term data only when changed.
@@ -208,9 +259,10 @@ linger, reconnect if necessary. To uninstall the service, stop/disable it with
   synaptic weights and motor/goal values while resetting transient activity.
   Neither manual nor automatic respawning evolves a population.
 - **Habitat:** creature, food, blue water sources, coral predators, recent trail, and a 240° field of vision. Food
-  regrows at the same position 25 simulated seconds after consumption.
+  regrows at the same position 45 simulated seconds after consumption by default.
 - **Through its eyes:** separate food, wall, and water channels plus omnidirectional
-  threat sensing. The creature has no access to global target coordinates.
+  threat sensing, material sight and close obstacle sensing. Blocks occlude food,
+  water and threat sight. The creature has no access to global target coordinates.
 - **Inside the brain:** all 500 neurons, shaded by firing rate; motor populations;
   eligibility strength and distance of current weights from their initial values.
 - **Learning to survive:** starting experience, learned goal and motor intent,
@@ -294,7 +346,7 @@ worlds can seek food immediately and continue adapting.
 
 `data/checkpoint.npz` contains weights, voltages, spike state, eligibility and spike
 traces, thresholds, all four RNG states, motor and goal values and eligibility, the held
-action and accumulated return, sensory memory, resources, predators, creature, settings, metrics, and
+action and accumulated return, sensory memory, resources, predators, blocks and construction credit, creature, settings, metrics, and
 events. It is a numeric NumPy archive with JSON
 metadata, loaded with `allow_pickle=False`. The previous save is kept as
 `data/checkpoint.previous.npz`. Both are local to your OptiPlex and ignored by Git.
@@ -331,8 +383,11 @@ cd ~/neuroplex
 The Python suite includes automatic-life timing/persistence and streaming checks.
 Optional browser-interpolation unit tests need Node.js only on your development
 machine: `node --test tests/test_motion.cjs` (no npm dependencies). Node.js is not
-needed to run Neuroplex. [v0.3.1 validation](docs/VALIDATION-v0.3.1.md) describes the
+needed to run Neuroplex. [v0.4 validation](docs/VALIDATION-v0.4.md) describes the
 live-browser checks and remaining performance limits.
+
+Reproduce the bounded escape-practice and larger-world smoke check without touching
+your saved creature: `.venv/bin/python scripts/validate-shelters.py`.
 
 The original food benchmark fixes stage 0, turns sensory memory and curriculum off,
 and compares trained and zero motor values on matched fresh worlds,
