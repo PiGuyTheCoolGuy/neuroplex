@@ -1,6 +1,7 @@
 # v0.3 design and experimental limits
 
-This describes the v0.3 foundation. v0.4 changes dimensions, resource density,
+For v0.5 cover memory, shared features and own-experience replay, see
+[COVER-LEARNING.md](COVER-LEARNING.md). This describes the v0.3 foundation. v0.4 changes dimensions, resource density,
 observations, policy tables and checkpoints; see [SHELTERS.md](SHELTERS.md).
 
 ## What is programmed, transferred, and learned

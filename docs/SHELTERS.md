@@ -1,5 +1,9 @@
 # v0.4 shelter foundations and obstacle-aware escape
 
+For current sensory memory, shared feature learning, replay and shelter practice,
+see [COVER-LEARNING.md](COVER-LEARNING.md). The physics below remain in use; the
+observation counts and missing-memory limitations describe v0.4.
+
 ## Scope
 
 The creature can move materials by pushing, arrange barriers, and receive learning

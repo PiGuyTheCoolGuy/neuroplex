@@ -24,6 +24,11 @@ const ecologyCells = Array.from({ length: 32 }, (_, i) => {
   $("ecology-retina").append(cell);
   return cell;
 });
+const materialCells = Array.from({ length: 32 }, () => {
+  const cell = document.createElement("span");
+  $("material-retina").append(cell);
+  return cell;
+});
 const motorRows = ["Forward", "Backward", "Left", "Right"].map((name) => {
   const row = document.createElement("div");
   row.className = "motor-row";
@@ -144,13 +149,16 @@ $("trend-metric").onchange = () => state && drawTrends();
 $("experiment-kind").onchange = () => {
   const evolving = $("experiment-kind").value === "evolve";
   const escape = $("experiment-kind").value === "escape";
+  const shelter = $("experiment-kind").value === "shelter";
+  const practice = escape || shelter;
   document.querySelectorAll(".evolution-field").forEach((field) => (field.hidden = !evolving));
   document.querySelectorAll(".evaluation-field").forEach((field) => (field.hidden = evolving));
-  document.querySelectorAll(".escape-field").forEach((field) => (field.hidden = !escape));
+  document.querySelectorAll(".escape-field").forEach((field) => (field.hidden = !practice));
   $("escape-help").hidden = !escape;
-  $("experiment-stage").disabled = escape;
-  if (escape) { $("experiment-stage").value = "3"; $("experiment-seconds").value = "12"; }
-  $("experiment-seconds").max = escape ? "60" : "600";
+  $("shelter-help").hidden = !shelter;
+  $("experiment-stage").disabled = practice;
+  if (practice) { $("experiment-stage").value = "3"; $("experiment-seconds").value = shelter ? "30" : "12"; }
+  $("experiment-seconds").max = practice ? "60" : "600";
 };
 $("experiment-form").onsubmit = async (event) => {
   event.preventDefault();
@@ -317,7 +325,7 @@ function update() {
   $("firing-rate").textContent = `${b.mean_rate.toFixed(1)} Hz`;
   $("weight-change").textContent = b.weight_change.toFixed(5);
   $("eligibility").textContent = b.eligibility_mean.toFixed(3);
-  $("policy-source").textContent = b.policy.source.startsWith("escape-practice:") ? "Escape practice" : b.policy.source.startsWith("evolution:") ? "Evolved" : b.policy.source.startsWith("bundled:") ? "Pretrained food skill" : "From scratch";
+  $("policy-source").textContent = b.policy.source.startsWith("shelter-practice:") ? "Shelter practice" : b.policy.source.startsWith("escape-practice:") ? "Escape practice" : b.policy.source.startsWith("evolution:") ? "Evolved" : b.policy.source.startsWith("bundled:") ? "Pretrained food skill" : "From scratch";
   $("policy-action").textContent = b.policy.action;
   $("policy-goal").textContent = b.policy.goal;
   $("goal-updates").textContent = b.policy.goal_updates.toLocaleString();
@@ -340,6 +348,18 @@ function update() {
     cell.style.background = `rgba(${i < 16 ? "112,181,223" : "237,143,137"},${0.04 + intensity * 0.96})`;
     cell.title = `${i < 16 ? "Water" : "Threat"} ${(i % 16) + 1}: ${intensity.toFixed(2)}`;
   });
+  materialCells.forEach((cell, i) => {
+    const intensity = (i < 16 ? w.fixed_retina?.[i] : w.material_retina?.[i - 16]) || 0;
+    cell.style.background = `rgba(${i < 16 ? "112,181,223" : "220,169,107"},${0.04 + intensity * .96})`;
+    cell.title = `${i < 16 ? "Fixed boundary" : "Movable block"} ${(i % 16) + 1}: ${intensity.toFixed(2)}`;
+  });
+  const cover = b.policy.cover_learning;
+  $("cover-learning-status").textContent = cover
+    ? `Own experience · ${cover.experiences}/${cover.capacity} memories · ${cover.updates[1].toLocaleString()} building updates · ${cover.updates[2].toLocaleString()} use-cover updates (including replay).`
+    : "Cover learning: waiting for experience.";
+  $("cover-memory-status").textContent = state.memory.enabled && state.memory.cover_confidence > 0
+    ? `Visited cover · ${Math.round(state.memory.cover_confidence * 100)}% confidence · ${state.memory.cover_age.toFixed(1)}s since observed · expires after ${state.memory.cover_seconds}s.`
+    : "No visited cover remembered.";
   $("memory-status").textContent = state.memory.enabled
     ? `Sensory traces · food ${Math.round(state.memory.food_confidence * 100)}% (${state.memory.food_age.toFixed(1)}s) · water ${Math.round(state.memory.water_confidence * 100)}% · expire after ${state.memory.seconds.toFixed(1)}s.`
     : "Sensory memory is off.";
@@ -387,9 +407,17 @@ function updateLab() {
   $("lab-progress").textContent = current.error || parts.join(" · ");
   const result = current.summary;
   $("lab-result").textContent = result
-    ? `${current.kind === "escape" ? "Escape audit" : current.kind === "evolve" ? "Unseen audit" : "Frozen evaluation"}: ${result.survived}/${result.trials} survived the full trial · ${result.mean_food_per_minute.toFixed(1)} food/min · ${result.mean_survival_seconds.toFixed(1)}s mean survival · ${result.mean_damage.toFixed(1)} mean damage.`
+    ? `${current.kind === "shelter" ? "Shelter audit" : current.kind === "escape" ? "Escape audit" : current.kind === "evolve" ? "Unseen audit" : "Frozen evaluation"}: ${result.survived}/${result.trials} survived the full trial · ${result.mean_food_per_minute.toFixed(1)} food/min · ${result.mean_survival_seconds.toFixed(1)}s mean survival · ${result.mean_damage.toFixed(1)} mean damage.`
     : "";
   if (current.baseline_audit) $("lab-result").textContent += ` Starting model: ${current.baseline_audit.summary.survived}/${current.baseline_audit.summary.trials} survived those same audit worlds, ${current.baseline_audit.summary.mean_damage.toFixed(1)} mean damage.`;
+  if (current.kind === "shelter" && result) {
+    const baseline = current.baseline_audit.summary;
+    $("lab-result").textContent += ` Building reward ${baseline.mean_construction_reward.toFixed(2)} → ${result.mean_construction_reward.toFixed(2)}; protected seconds ${baseline.mean_protected_seconds.toFixed(1)} → ${result.mean_protected_seconds.toFixed(1)}.`;
+    if (current.habitat_audit) {
+      const before = current.baseline_habitat_audit.summary, after = current.habitat_audit.summary;
+      $("lab-result").textContent += ` Full habitat: damage ${before.mean_damage.toFixed(1)} → ${after.mean_damage.toFixed(1)}; food/min ${before.mean_food_per_minute.toFixed(1)} → ${after.mean_food_per_minute.toFixed(1)}; building reward ${before.mean_construction_reward.toFixed(2)} → ${after.mean_construction_reward.toFixed(2)}.`;
+    }
+  }
   $("download-result").hidden = current.state !== "completed";
   $("evolution-chart").hidden = !current.generations?.length;
   if (current.generations?.length) drawChart("evolution-chart", current.generations, [{key: "best_fitness", color: "#b6a1e9"}], "generation");
@@ -549,7 +577,7 @@ function drawNeurons() {
     ch = height / rows;
   state.brain.rates.forEach((rate, i) => {
     const color =
-      i < 80 ? "112,181,223" : i < 400 ? "134,233,197" : "180,154,243";
+      i < 80 ? "112,181,223" : i >= 144 && i < 248 ? "220,169,107" : i < 400 ? "134,233,197" : "180,154,243";
     ctx.fillStyle = `rgba(${color},${0.12 + Math.min(1, rate / 45) * 0.88})`;
     ctx.fillRect(
       (i % cols) * cw + 1,

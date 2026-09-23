@@ -65,13 +65,19 @@ class Config:
     obstacle_range: float = 12.0
     construction_reward: float = 8.0
     goal_switch_margin: float = 0.4
+    cover_memory_seconds: float = 180.0
+    threat_memory_seconds: float = 6.0
+    cover_learning_rate: float = 0.08
+    cover_replay_steps: int = 2
+    cover_shaping: float = 2.0
 
     def __post_init__(self):
         if self.neurons != 500 or not 1 <= self.fan_out < 420:
             raise ValueError("v1 uses the documented 500-neuron layout; fan_out must be 1..419")
         booleans = {"pretrained_policy", "memory_enabled", "curriculum_enabled", "water_enabled"}
         nonnegative = {"seed", "food_count", "shaping_scale", "exploration_floor", "habitat_stage",
-                       "water_count", "predator_count", "block_count", "goal_switch_margin", "construction_reward"}
+                       "water_count", "predator_count", "block_count", "goal_switch_margin", "construction_reward",
+                       "cover_replay_steps", "cover_shaping"}
         for name, value in asdict(self).items():
             if name in booleans:
                 if type(value) is not bool:
@@ -94,6 +100,10 @@ class Config:
             raise ValueError("at most 64 blocks; push speed fraction must be in (0, 1]")
         if self.goal_switch_margin < 0 or self.construction_reward < 0:
             raise ValueError("goal margin and construction reward must be nonnegative")
+        if type(self.cover_replay_steps) is not int or not 0 <= self.cover_replay_steps <= 8:
+            raise ValueError("cover_replay_steps must be an integer from 0 to 8")
+        if not 0 < self.cover_learning_rate <= .3 or self.cover_shaping < 0:
+            raise ValueError("invalid cover learning settings")
         if abs(round(self.world_dt / self.brain_dt) * self.brain_dt - self.world_dt) > 1e-9:
             raise ValueError("world_dt must be a multiple of brain_dt")
         if min(self.world_width, self.world_height) <= 8 * self.creature_radius:
@@ -111,7 +121,16 @@ GROUPS = [
     ("Hunger", 32, 48),
     ("Thirst", 48, 64),
     ("Touch", 64, 80),
-    ("Association", 80, 400),
+    ("Resource memory", 80, 112),
+    ("Water and threats", 112, 144),
+    ("Visible blocks", 144, 160),
+    ("Obstacles", 160, 176),
+    ("Local cover", 176, 184),
+    ("Fixed boundaries", 184, 200),
+    ("Block surfaces", 200, 216),
+    ("Cover memory", 216, 232),
+    ("Threat memory", 232, 248),
+    ("Association", 248, 400),
     ("Forward", 400, 425),
     ("Backward", 425, 450),
     ("Left", 450, 475),

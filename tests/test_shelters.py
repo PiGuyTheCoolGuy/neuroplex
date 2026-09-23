@@ -138,13 +138,13 @@ def test_escape_remains_learned_and_reduces_exploration_near_predators():
     senses = np.zeros(181, dtype=np.float32)
     senses[100] = .9
     manager = policy.encode_goal(senses)
-    policy.goal_values[manager] = [0, 0, 20, 0]
+    policy.goal_values[manager] = [0, 0, 20, 0, 0]
     motor = policy.encode_motor(senses, 2)
     policy.values[motor, 5] = 50  # deliberately choose backward, no hidden steering overrides it
     policy.begin(senses, False)
     assert policy.goal == 2 and policy.action == 5 and policy.risk_scale == .2
     policy.reset_activity()
-    policy.goal_values[manager] = [50, 0, 0, 0]
+    policy.goal_values[manager] = [50, 0, 0, 0, 0]
     policy.begin(senses, False)
     assert policy.goal == 0  # no hardcoded emergency goal switch
 
@@ -191,9 +191,9 @@ def test_real_v3_schema_upgrades_once_preserving_learning_and_archiving_original
     for key in ("config", "world_config"):
         metadata[key] = {k: v for k, v in metadata[key].items() if k not in new_fields}
     for key in ("values", "visits", "eligibility"):
-        data["policy_" + key] = data["policy_" + key][:459]
+        data["policy_" + key] = data["policy_" + key][:459, :6]
     for key in ("goal_values", "goal_visits", "goal_eligibility"):
-        data["policy_" + key] = data["policy_" + key][:, :3]
+        data["policy_" + key] = data["policy_" + key][:108, :3]
     data["policy_skill_updates"] = data["policy_skill_updates"][:3]
     metadata["policy"].pop("risk_scale")
     for key in ("blocks", "block_retina", "obstacle_retina", "block_cover_best"):
@@ -217,7 +217,7 @@ def test_real_v3_schema_upgrades_once_preserving_learning_and_archiving_original
         assert upgraded.paused and not upgraded.brain.learning
         np.testing.assert_array_equal(upgraded.brain.weights, sim.brain.weights)
         np.testing.assert_array_equal(upgraded.brain.policy.values[:459], sim.brain.policy.values[:459])
-        np.testing.assert_array_equal(upgraded.brain.policy.goal_values[:, :3], sim.brain.policy.goal_values[:, :3])
+        np.testing.assert_array_equal(upgraded.brain.policy.goal_values[:108, :3], sim.brain.policy.goal_values[:108, :3])
         assert (tmp_path / "checkpoint.v3.npz").read_bytes() == original
     finally:
         runner.close()

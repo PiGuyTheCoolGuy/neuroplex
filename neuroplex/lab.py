@@ -17,7 +17,7 @@ from .experiments import atomic_json
 
 class ExperimentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    kind: Literal["evaluate", "evolve", "escape"] = "evaluate"
+    kind: Literal["evaluate", "evolve", "escape", "shelter"] = "evaluate"
     episodes: int = Field(default=40, ge=1, le=200)
     stage: int = Field(default=0, ge=0, le=4)
     seconds: float = Field(default=60.0, ge=5, le=600)
@@ -29,10 +29,10 @@ class ExperimentRequest(BaseModel):
 
     @model_validator(mode="after")
     def practice_bounds(self):
-        if self.kind == "escape":
+        if self.kind in ("escape", "shelter"):
             self.stage = 3
             if self.seconds > 60:
-                raise ValueError("Escape practice episodes must be 5–60 seconds")
+                raise ValueError("Practice episodes must be 5–60 seconds")
         return self
 
 

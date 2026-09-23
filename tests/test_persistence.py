@@ -144,7 +144,7 @@ def test_v2_upgrade_keeps_food_values_mid_action_and_archives_original(tmp_path)
         allowed = set(names[:names.index("pretrained_policy") + 1])
         metadata[key] = {k: v for k, v in metadata[key].items() if k in allowed}
     for key in ("values", "visits", "eligibility"):
-        data["policy_" + key] = data["policy_" + key][:153]
+        data["policy_" + key] = data["policy_" + key][:153, :6]
     metadata["policy"] = {k: v for k, v in metadata["policy"].items() if k not in ("goal", "goal_state", "goal_updates", "risk_scale")}
     metadata["world"] = {k: v for k, v in metadata["world"].items()
                          if k in ("time", "x", "y", "heading", "energy", "alive", "eaten", "distance", "touch", "speed", "turn")}

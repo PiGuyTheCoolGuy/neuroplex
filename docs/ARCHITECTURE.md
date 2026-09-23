@@ -1,9 +1,11 @@
 # Neuroplex architecture
 
-Current v0.4 mechanics and learning extensions are in [SHELTERS.md](SHELTERS.md):
-solid pushable blocks, occlusion, construction credit, obstacle-aware escape,
-isolated escape practice and format-4 migration. The following sections document
-the earlier foundation; their historical table sizes are not current totals.
+Current v0.5 learning is documented in [COVER-LEARNING.md](COVER-LEARNING.md):
+separate block/boundary senses, visited-cover memory, a learned use-cover goal,
+Rest, shared action features and replay of the creature’s own experience.
+[SHELTERS.md](SHELTERS.md) records the v0.4 block physics and reward foundation.
+The sections below describe historical versions, including their old table sizes
+and absence of replay; they are not current parameter counts.
 
 The v0.3 extension is documented in [ECOSYSTEM.md](ECOSYSTEM.md): water,
 predators, goal learning, sensory memory, curriculum, evaluation and evolution.

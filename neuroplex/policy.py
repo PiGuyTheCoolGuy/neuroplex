@@ -1,7 +1,8 @@
 """A small online TD motor policy, coupled to the spiking body's motor neurons.
 
 This is explicitly a hybrid: learned attention and motor tables, not LIF neurons.
-Local TD/eligibility updates require no backpropagation, replay, or action teacher.
+Local TD/eligibility and feature updates require no backpropagation or action teacher.
+The cover residual reuses only a bounded buffer of this creature's experience.
 Food coordinates and a desired heading never enter this module.
 """
 
@@ -11,20 +12,23 @@ from pathlib import Path
 import numpy as np
 
 from .config import Config
+from .cover import CoverLearner, SENSES, cover_features
 
 
-ACTION_NAMES = ("Forward", "Curve left", "Curve right", "Turn left", "Turn right", "Backward")
-GOAL_NAMES = ("Food", "Water", "Escape", "Build cover")
+ACTION_NAMES = ("Forward", "Curve left", "Curve right", "Turn left", "Turn right", "Backward", "Rest")
+GOAL_NAMES = ("Food", "Water", "Escape", "Build cover", "Use cover")
 ESCAPE_START = 459  # retain all v3 rows verbatim for migration / legacy sensors
 ESCAPE_ROWS = 17 * 3 * 16
 BUILD_START = ESCAPE_START + ESCAPE_ROWS
 BUILD_CONTEXTS = 4 * 5  # cover/contact state × relative bearing of another visible block
-POLICY_ROWS = BUILD_START + 153 * BUILD_CONTEXTS
+COVER_START = BUILD_START + 153 * BUILD_CONTEXTS
+POLICY_ROWS = COVER_START + 153
+GOAL_STATES = 108 * 4  # original need state × remembered cover/current occupancy
 # Currents specify a body's motor primitives, never a food-directed action.
 # Columns: forward, backward, left, right; movement still depends on LIF spikes.
 MOTOR_CURRENTS = np.array([
     [1.60, 0, 0, 0], [1.25, 0, 1.15, 0], [1.25, 0, 0, 1.15],
-    [0, 0, 1.60, 0], [0, 0, 0, 1.60], [0, 1.22, 0, 0],
+    [0, 0, 1.60, 0], [0, 0, 0, 1.60], [0, 1.22, 0, 0], [0, 0, 0, 0],
 ], dtype=np.float32)
 
 
@@ -39,11 +43,12 @@ class MotorPolicy:
     def __init__(self, config: Config):
         self.config = config
         self.rng = np.random.default_rng(config.seed + 2000)
-        self.values = np.zeros((POLICY_ROWS, 6), dtype=np.float64)
-        self.visits = np.zeros((POLICY_ROWS, 6), dtype=np.int64)
-        self.goal_values = np.zeros((108, 4), dtype=np.float64)
-        self.goal_visits = np.zeros((108, 4), dtype=np.int64)
-        self.skill_updates = np.zeros(4, dtype=np.int64)
+        self.values = np.zeros((POLICY_ROWS, len(ACTION_NAMES)), dtype=np.float64)
+        self.visits = np.zeros_like(self.values, dtype=np.int64)
+        self.goal_values = np.zeros((GOAL_STATES, 5), dtype=np.float64)
+        self.goal_visits = np.zeros((GOAL_STATES, 5), dtype=np.int64)
+        self.skill_updates = np.zeros(5, dtype=np.int64)
+        self.cover_learner = CoverLearner(config.seed)
         self.goal_updates = 0
         self.decisions = 0
         self.updates = 0
@@ -54,14 +59,15 @@ class MotorPolicy:
             data = json.loads(path.read_text())
             values = np.asarray(data["values"], dtype=np.float64)
             visits = np.asarray(data["visits"], dtype=np.int64)
-            if (data["format"] != 1 or values.shape != (153, 6) or visits.shape != (153, 6)
+            columns = 6 if data["format"] == 1 else 7
+            if (data["format"] not in (1, 2) or values.shape != (153, columns) or visits.shape != (153, columns)
                     or not np.isfinite(values).all() or np.any(visits < 0)):
                 raise ValueError("Invalid bundled motor policy")
-            self.values[:153] = values
+            self.values[:153, :columns] = values
             # Explicit transfer learning: approaching water reuses food's motor
             # geometry. Choosing water versus food still has to be learned.
-            self.values[153:306] = values
-            self.visits[:153] = visits
+            self.values[153:306, :columns] = values
+            self.visits[:153, :columns] = visits
             self.updates = self.bootstrap_updates = int(data["training"]["updates"])
             self.skill_updates[0] = self.updates
             self.source = "bundled:foraging-v0.2"
@@ -78,6 +84,13 @@ class MotorPolicy:
         # Explicit transfer: approaching a visible block reuses food navigation.
         for context in range(BUILD_CONTEXTS):
             self.values[BUILD_START + context * 153:BUILD_START + (context + 1) * 153] = self.values[:153]
+        self.initialize_cover_skill()
+
+    def initialize_cover_skill(self):
+        # Existing navigation values are a prior, not a shelter route or a plan.
+        self.values[COVER_START:] = self.values[:153]
+        for context in range(1, 4):
+            self.goal_values[context * 108:(context + 1) * 108, :4] = self.goal_values[:108, :4]
 
     def reset_activity(self):
         self.eligibility = np.zeros_like(self.values)
@@ -96,10 +109,11 @@ class MotorPolicy:
         self.last_base_reward = 0.0
         self.last_shaping = 0.0
         self.risk_scale = 1.0
+        self.cover_learner.current_features.fill(0)
 
     def encode_motor(self, senses, goal):
         if len(senses) >= 181 and goal == 2:
-            threat = senses[96:112]
+            threat = self.threat_senses(senses)
             brightness = float(threat.max())
             sector = int(threat.argmax()) if brightness > .001 else 16
             proximity = int(brightness > .4) + int(brightness > .65)
@@ -116,6 +130,8 @@ class MotorPolicy:
             neighbor = relative // 4 if blocks[second] > .001 else 4
             context = context * 5 + neighbor
             return BUILD_START + context * 153 + self.encode(self.target_senses(senses, goal))
+        if goal == 4:
+            return COVER_START + self.encode(self.target_senses(senses, goal))
         return goal * 153 + self.encode(self.target_senses(senses, goal))
 
     @staticmethod
@@ -139,9 +155,9 @@ class MotorPolicy:
                 water = self.target_senses(senses, 1)[:16]
                 potential *= 0.25 + 0.75 * float(senses[32])
                 potential += (0.25 + 0.75 * float(senses[48])) * float(np.max(water * alignment))
-            potential -= 1.5 * float(senses[96:112].max())
+            potential -= 1.5 * float(self.threat_senses(senses).max())
         if len(senses) >= 181:
-            threat = senses[96:112]
+            threat = self.threat_senses(senses)
             danger = float(threat.max())
             bearings = (np.arange(16) + .5) * 2 * np.pi / 16 - np.pi
             away = -float(np.dot(threat, np.cos(bearings))) / max(float(threat.sum()), .001)
@@ -149,10 +165,16 @@ class MotorPolicy:
             # Disclosed shaping prior: distance, open escape direction, and not
             # facing a nearby obstacle. It never chooses a motor command.
             potential += danger * (-1.5 + .8 * away * (1 - front) - .6 * front)
-        return self.config.shaping_scale * potential
+        if len(senses) >= SENSES:
+            # A bounded observation-only safety potential. It cannot pay a
+            # perpetual camping/peekaboo bonus: the same discounted difference
+            # is applied at every tick, including terminal states.
+            need = max(float(senses[32]), float(senses[48]) if senses[144] else 0)
+            recent_danger = max(float(senses[96:112].max()), float(senses[247]))
+            potential += self.config.cover_shaping * recent_danger * senses[178] * (1 - need)
+        return float(self.config.shaping_scale * potential)
 
-    @staticmethod
-    def target_senses(senses, goal):
+    def target_senses(self, senses, goal):
         result = senses[:80].copy()
         if len(senses) >= 146:
             if goal == 0:
@@ -160,10 +182,23 @@ class MotorPolicy:
             elif goal == 1:
                 result[:16] = np.maximum(senses[80:96], senses[128:144])
             elif goal == 2:
-                result[:16] = senses[96:112]
+                result[:16] = self.threat_senses(senses)
             elif goal == 3 and len(senses) >= 181:
                 result[:16] = senses[146:162]
+            elif goal == 4 and len(senses) >= SENSES:
+                # Re-bin a remembered 360° body-relative bearing into the
+                # established 240° navigation interface, even if behind us.
+                result[:16] = 0
+                for i, strength in enumerate(senses[213:229]):
+                    angle = (i + .5) * 2 * np.pi / 16 - np.pi
+                    sector = int(np.clip((angle / self.config.vision_fov + .5) * 16, 0, 15))
+                    result[sector] = max(result[sector], strength)
         return result
+
+    @staticmethod
+    def threat_senses(senses):
+        visible = senses[96:112]
+        return np.maximum(visible, senses[229:245]) if len(senses) >= SENSES else visible
 
     @staticmethod
     def available_goals(senses):
@@ -171,20 +206,27 @@ class MotorPolicy:
         if len(senses) >= 146:
             if senses[144]:
                 available.append(1)
-            if senses[96:112].max() > 0.001:
+            if MotorPolicy.threat_senses(senses).max() > 0.001:
                 available.append(2)
         if len(senses) >= 181 and senses[180] and senses[146:162].max() > .001:
             available.append(3)
+        if len(senses) >= SENSES and senses[245] > .02:
+            available.append(4)
         return np.asarray(available)
 
     def encode_goal(self, senses):
         hunger = min(2, int(float(senses[32]) * 3))
         thirst = min(2, int(float(senses[48]) * 3))
-        threat = float(senses[96:112].max()) if len(senses) >= 146 else 0
+        threat = float(self.threat_senses(senses).max()) if len(senses) >= 146 else 0
         danger = int(threat > 0.001) + int(threat > 0.65)
         food = int(self.target_senses(senses, 0)[:16].max() > 0.001)
         water = int(len(senses) >= 146 and self.target_senses(senses, 1)[:16].max() > 0.001)
-        return (((hunger * 3 + thirst) * 3 + danger) * 2 + food) * 2 + water
+        base = (((hunger * 3 + thirst) * 3 + danger) * 2 + food) * 2 + water
+        context = (int(senses[245] > .02) + 2 * int(senses[178] >= .25)) if len(senses) >= SENSES else 0
+        return context * 108 + base
+
+    def action_values(self, state, goal, features):
+        return self.values[state] + self.cover_learner.scores(goal, features)
 
     def _epsilon(self, updates, learning):
         c = self.config
@@ -202,7 +244,7 @@ class MotorPolicy:
 
     def begin(self, senses: np.ndarray, learning: bool) -> np.ndarray:
         self.before_potential = self.potential(senses)
-        self.risk_scale = .2 if len(senses) >= 181 and senses[96:112].max() > .65 else 1.0
+        self.risk_scale = .2 if len(senses) >= 181 and self.threat_senses(senses).max() > .65 else 1.0
         if not self.pending:
             previous_goal = self.goal
             self.goal_state = self.encode_goal(senses)
@@ -223,11 +265,13 @@ class MotorPolicy:
             if self.goal != previous_goal:
                 self.eligibility.fill(0)
             self.state = self.encode_motor(senses, self.goal)
-            candidates = np.flatnonzero(self.values[self.state] >= self.values[self.state].max() - 1e-10)
+            self.cover_learner.current_features[:] = cover_features(senses, self.config.vision_fov)
+            scores = self.action_values(self.state, self.goal, self.cover_learner.current_features)
+            candidates = np.flatnonzero(scores >= scores.max() - 1e-10)
             greedy = int(self.rng.choice(candidates))
             self.action = greedy
             if self.rng.random() < self.exploration(learning):
-                self.action = int(self.rng.integers(6))
+                self.action = int(self.rng.integers(len(ACTION_NAMES)))
             # Watkins's trace cut: credit must not cross a nongreedy action.
             if self.action not in candidates:
                 self.eligibility.fill(0)
@@ -251,7 +295,7 @@ class MotorPolicy:
                                  - damage * 0.5 - 0.2 * c.world_dt - 2.4 * c.world_dt * (touch if not pushed else 0))
         self.last_base_reward += c.construction_reward * construction_gain
         if len(senses) >= 181:
-            danger = float(senses[96:112].max())
+            danger = float(self.threat_senses(senses).max())
             self.last_base_reward -= c.world_dt * (3 * danger * danger + 4 * touch * danger)
         if not alive:
             self.last_base_reward -= c.eating_reward
@@ -264,10 +308,13 @@ class MotorPolicy:
         if self.ticks < round(c.action_seconds / c.world_dt) and alive:
             return None
         next_state = self.encode_motor(senses, self.goal)
-        bootstrap = self.discount * float(self.values[next_state].max()) if alive else 0.0
-        td = self.return_sum + bootstrap - self.values[self.state, self.action]
+        features = cover_features(senses, self.config.vision_fov)
+        bootstrap = self.discount * float(self.action_values(next_state, self.goal, features).max()) if alive else 0.0
+        td = self.return_sum + bootstrap - self.action_values(self.state, self.goal, self.cover_learner.current_features)[self.action]
         self.last_td_error = float(td)
         if learning:
+            self.cover_learner.observe(self.goal, self.action, self.state, next_state,
+                                       self.return_sum, self.discount, alive, features, self.values, c)
             self.eligibility *= self.discount * c.policy_trace_decay
             self.eligibility[self.state, self.action] = 1.0
             self.values += c.policy_learning_rate * np.clip(td, -10, 10) * self.eligibility
@@ -305,4 +352,5 @@ class MotorPolicy:
             "parameters": int(self.values.size + self.goal_values.size), "source": self.source,
             "bootstrap_updates": self.bootstrap_updates,
             "live_updates": self.updates - self.bootstrap_updates,
+            "cover_learning": self.cover_learner.summary(),
         }

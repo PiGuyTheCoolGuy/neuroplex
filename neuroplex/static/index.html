@@ -17,7 +17,7 @@
     <header class="topbar">
       <a class="brand" href="/" aria-label="Neuroplex home"
         ><span class="brand-icon">N</span> neuroplex<span class="version"
-          >/ 0.4</span
+          >/ 0.5</span
         ></a
       >
       <div class="top-note">ARTIFICIAL LIFE LABORATORY</div>
@@ -108,7 +108,8 @@
             <p id="stream-status" class="stream-status">Live state stream · smooth local rendering</p>
             <div class="panel-body compact">
               <p id="construction-status" class="help">Blocks appear from stage 2. Pushing and arranging cover are learning tasks.</p>
-              <p class="help">Blocks stop movement and line of sight. Useful cover needs an exit; touching a block earns no bonus. Building skill starts inexperienced.</p>
+              <p class="help">Blocks stop movement and line of sight. Useful cover needs an exit; touching a block earns no bonus. The creature can remember cover it has visited and learn when to return.</p>
+              <p id="cover-learning-status" class="help">Cover learning: waiting for experience.</p>
             </div>
           </section>
           <div class="metric-grid">
@@ -183,7 +184,7 @@
               <p class="help">Experiments use copies of this creature. Frozen trials disable learning and shaping rewards. Evolution trains and selects a small population, then audits its winner on new worlds.</p>
               <form id="experiment-form">
                 <div class="form-grid">
-                  <label class="field">Experiment<select id="experiment-kind"><option value="evaluate">Frozen evaluation</option><option value="evolve">Evolution</option><option value="escape">Escape practice · walls & corners</option></select></label>
+                  <label class="field">Experiment<select id="experiment-kind"><option value="evaluate">Frozen evaluation</option><option value="evolve">Evolution</option><option value="escape">Escape practice · walls & corners</option><option value="shelter">Shelter practice · blocks & cover</option></select></label>
                   <label class="field escape-field" hidden>Practice episodes<input id="experiment-episodes" type="number" min="1" max="200" value="40" required></label>
                   <label class="field">Test habitat<select id="experiment-stage"><option value="0">Foraging</option><option value="1">Scarce food</option><option value="2">Food and water</option><option value="3">First predator</option><option value="4">Wild habitat</option></select></label>
                   <label class="field">Seconds per world<input id="experiment-seconds" type="number" min="5" max="600" value="60" required></label>
@@ -201,6 +202,7 @@
               <a id="download-result" href="/api/experiments/result" class="download" hidden>Download detailed results</a>
               <canvas id="evolution-chart" height="120" aria-label="Best fitness across generations" hidden></canvas>
               <p id="escape-help" class="help" hidden>Practice runs a copy near walls and corners, then compares it with the starting brain on new frozen trials. Food, water, building values and synapses stay intact. Try 40 episodes × 12 seconds; compare damage, not just survival.</p>
+              <p id="shelter-help" class="help" hidden>Try 40 episodes × 30 seconds. A copy encounters random loose blocks, then predators, using its own actions. Compare building reward, protection and damage in both new practice layouts and full habitats. A candidate may be worse; adoption is optional.</p>
               <button id="adopt-champion" type="button" disabled>Start next life with trained candidate</button>
               <p class="help">Pause or turn off automatic lives before adopting a candidate after death. Adoption archives the current brain and uses the candidate's saved learning; compare its audit first.</p>
               <div id="evaluation-history" class="evaluation-history"></div>
@@ -258,7 +260,10 @@
             </p>
             <div class="retina-label"><span>WATER</span><span>THREATS · 360°</span></div>
             <div id="ecology-retina" class="retina" aria-label="Water vision and omnidirectional threat sensors"></div>
+            <div class="retina-label"><span>FIXED WALLS · 360°</span><span>MOVABLE · 360°</span></div>
+            <div id="material-retina" class="retina" aria-label="Separate fixed boundary and movable block sensors"></div>
             <p id="memory-status" class="help">Sensory memory: no target retained yet.</p>
+            <p id="cover-memory-status" class="help">No visited cover remembered.</p>
           </section>
           <section class="panel brain-panel">
             <div class="panel-heading">
@@ -274,6 +279,7 @@
             <div class="neuron-key">
               <span><i class="sensory"></i> Sensory</span
               ><span><i class="association"></i> Association</span
+              ><span><i class="materials"></i> Blocks / cover</span
               ><span><i class="motor"></i> Motor</span>
             </div>
             <div class="stat-line">

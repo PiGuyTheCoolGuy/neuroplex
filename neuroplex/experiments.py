@@ -20,6 +20,8 @@ import numpy as np
 
 from .simulation import Simulation
 from .policy import ESCAPE_START, BUILD_START
+from .cover import CoverLearner
+from .geometry import circle_overlaps
 
 STRUCTURE = ("pre", "post", "inhibitory", "plastic", "weights", "initial_weights")
 LEARNED = ("values", "visits", "goal_values", "goal_visits", "skill_updates")
@@ -44,6 +46,8 @@ def fingerprint(sim):
         digest.update(getattr(sim.brain, name).tobytes())
     for name in LEARNED:
         digest.update(getattr(sim.brain.policy, name).tobytes())
+    for name in CoverLearner.LEARNED:
+        digest.update(getattr(sim.brain.policy.cover_learner, name).tobytes())
     return digest.hexdigest()
 
 
@@ -52,6 +56,9 @@ def copy_model(source, destination):
         getattr(destination.brain, name)[:] = getattr(source.brain, name)
     for name in LEARNED:
         getattr(destination.brain.policy, name)[:] = getattr(source.brain.policy, name)
+    for name in CoverLearner.LEARNED:
+        getattr(destination.brain.policy.cover_learner, name)[:] = getattr(source.brain.policy.cover_learner, name)
+    destination.brain.policy.cover_learner.clear_replay()
     for name in ("updates", "bootstrap_updates", "source", "goal_updates"):
         setattr(destination.brain.policy, name, getattr(source.brain.policy, name))
     destination.brain.policy.reset_activity()
@@ -94,6 +101,8 @@ def run_episode(sim, seconds, progress=None):
             "mean_energy": float(means[0]), "mean_hydration": float(means[1]), "mean_health": float(means[2]),
             "learning": sim.brain.learning, "weights_frozen": frozen,
             "shaping_enabled": sim.config.shaping_scale > 0,
+            "construction_reward": w.construction_reward_total, "push_distance": w.push_distance,
+            "protected_seconds": w.protected_seconds,
             "exploration_floor": sim.config.exploration_floor,
             "wall_seconds": time.monotonic() - started}
 
@@ -147,6 +156,8 @@ def escape_practice(source, request, directory, report):
         learner.brain.policy.skill_updates[2] = trial.brain.policy.skill_updates[2]
         learner.brain.policy.updates += int(trial.brain.policy.skill_updates[2]) - previous_updates
         learner.brain.policy.goal_updates = trial.brain.policy.goal_updates
+        for name in CoverLearner.LEARNED:
+            getattr(learner.brain.policy.cover_learner, name)[0] = getattr(trial.brain.policy.cover_learner, name)[0]
     learner.brain.policy.source = f"escape-practice:{request['episodes']}"
     seeds = [request["seed"] + 3_000_001 + i * 103 for i in range(request["trials"])]
     reports = []
@@ -168,7 +179,92 @@ def aggregate(records):
             "mean_food_per_minute": float(np.mean([r["food_per_minute"] for r in records])),
             "mean_drinks": float(np.mean([r["drinks"] for r in records])),
             "mean_damage": float(np.mean([r["damage"] for r in records])),
+            "mean_construction_reward": float(np.mean([r.get("construction_reward", 0) for r in records])),
+            "mean_push_distance": float(np.mean([r.get("push_distance", 0) for r in records])),
+            "mean_protected_seconds": float(np.mean([r.get("protected_seconds", 0) for r in records])),
             "all_weights_frozen": all(r["weights_frozen"] for r in records)}
+
+
+def shelter_trial(source, seed, learning, predators=False):
+    """Random loose material near the body, never a target layout or action label.
+
+    Practice changes encounter frequency. Food costs, push physics, geometry
+    rewards and the creature's own goal selection remain the live-world rules.
+    """
+    config = replace(source.config, seed=seed, world_width=64, world_height=48,
+                     food_count=12, water_count=0, water_enabled=False, block_count=6,
+                     predator_count=1, habitat_stage=3 if predators else 1,
+                     curriculum_enabled=False, shaping_scale=source.config.shaping_scale if learning else 0.0)
+    trial = Simulation(config)
+    copy_model(source, trial)
+    trial.brain.learning = learning
+    trial.auto_life = trial.auto_evaluate = False
+    rng = np.random.default_rng(seed + 8000)
+    w = trial.world
+    placed = []
+    for _ in range(config.block_count):
+        for _ in range(2000):
+            angle, distance = rng.uniform(-np.pi, np.pi), rng.uniform(4, 12)
+            point = np.array([w.x, w.y]) + distance * np.array([np.cos(angle), np.sin(angle)])
+            if placed and np.any(np.all(np.abs(np.asarray(placed) - point) < config.block_size + .3, axis=1)):
+                continue
+            if circle_overlaps(point, config.food_radius, w.food, config.block_size / 2).any():
+                continue
+            placed.append(point)
+            break
+        else:
+            raise ValueError("Could not place practice materials")
+    w.blocks[:] = placed
+    angle = rng.uniform(-np.pi, np.pi)
+    w.predators[0] = np.array([w.x, w.y]) + 16 * np.array([np.cos(angle), np.sin(angle)])
+    w.predator_ready_at[0] = 2
+    w.block_cover_best = w.construction_scores()
+    w.best_shelter = float(w.block_cover_best.max(initial=0))
+    w.sense()
+    return trial
+
+
+def shelter_practice(source, request, directory, report):
+    learner = fresh_trial(source, request["seed"], source.world.stage, learning=True)
+    seconds = min(60.0, request["seconds"])
+    for episode in range(request["episodes"]):
+        if CANCELLED.is_set():
+            raise InterruptedError("Experiment cancelled")
+        predators = episode >= request["episodes"] // 2
+        report({"phase": "cover under threat" if predators else "loose block practice", "episode": episode + 1}, force=True)
+        trial = shelter_trial(learner, request["seed"] + episode * 101, True, predators)
+        run_episode(trial, seconds, lambda age: report({"episode_seconds": age}))
+        current, trained = learner.brain.policy, trial.brain.policy
+        previous = int(current.skill_updates[3:].sum())
+        for name in ("values", "visits"):
+            getattr(current, name)[BUILD_START:] = getattr(trained, name)[BUILD_START:]
+        for name in ("goal_values", "goal_visits"):
+            getattr(current, name)[:] = getattr(trained, name)
+        current.skill_updates[3:] = trained.skill_updates[3:]
+        current.updates += int(current.skill_updates[3:].sum()) - previous
+        current.goal_updates = trained.goal_updates
+        for name in CoverLearner.LEARNED:
+            getattr(current.cover_learner, name)[1:] = getattr(trained.cover_learner, name)[1:]
+    learner.brain.policy.source = f"shelter-practice:{request['episodes']}"
+    seeds = [request["seed"] + 4_000_007 + i * 103 for i in range(request["trials"])]
+    audits = []
+    for model in (source, learner):
+        records = []
+        for i, seed in enumerate(seeds):
+            report({"phase": "frozen material audit", "trial": i + 1}, force=True)
+            records.append(run_episode(shelter_trial(model, seed, False, True), seconds))
+        audits.append({"seeds": seeds, "trials": records, "summary": aggregate(records)})
+    # Separate full-size habitat audit prevents dense practice performance being
+    # presented as evidence of transfer to the user's scarce world.
+    habitat_seeds = [request["seed"] + 5_000_011 + i * 103 for i in range(request["trials"])]
+    report({"phase": "frozen full habitat audit"}, force=True)
+    baseline_habitat = evaluate(source, seconds, habitat_seeds, 3)
+    habitat = evaluate(learner, seconds, habitat_seeds, 3)
+    learner.save(directory / "champion.npz")
+    return {"summary": audits[1]["summary"], "audit": audits[1], "baseline_audit": audits[0],
+            "habitat_audit": habitat, "baseline_habitat_audit": baseline_habitat,
+            "champion_available": True, "episodes": request["episodes"], "seconds_per_episode": seconds,
+            "method": "Own-experience block/cover learning; random loose materials, then threats; no action labels or target shelter; food/water/escape motor values and SNN weights retained"}
 
 
 def evaluate(source, seconds, seeds, stage, progress=None):
@@ -278,6 +374,8 @@ def execute(request, source_path, directory):
                                                           "episode_seconds": age}))
         elif request["kind"] == "escape":
             result = escape_practice(source, request, directory, report)
+        elif request["kind"] == "shelter":
+            result = shelter_practice(source, request, directory, report)
         else:
             result = evolve(source, request, directory, report)
         atomic_json(directory / "result.json", result)

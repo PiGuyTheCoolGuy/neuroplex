@@ -2,17 +2,18 @@
 
 **One creature learning to forage, evade predators, and arrange blocks into cover.**
 
-Neuroplex v0.4 is a CPU-only artificial-life experiment for Ubuntu 24.04. A Python
+Neuroplex v0.5 is a CPU-only artificial-life experiment for Ubuntu 24.04. A Python
 process runs the world continuously; your laptop's browser displays it. Closing the
 browser does not stop the simulation. There is no GPU, cloud model, PyTorch, Node.js
 build, or paid API to configure.
 
 The brain has **500 leaky integrate-and-fire neurons and 16,000 sparse synapses**,
-plus **26,442 stored action/goal values**, including the preserved legacy escape
-table and new obstacle-aware escape/construction contexts.
-This is a hybrid: learned values choose food, water, escape or building and a motor intent;
+plus **33,576 stored action/goal values and 2,142 shared feature weights**.
+Named sensory banks distinguish fixed boundaries, movable block surfaces and
+remembered cover. Learned values choose food, water, escape, building or using cover;
 spiking neurons produce movement. Recurrent STDP and value learning continue during its life.
-There is no backpropagation, action teacher, or replay buffer. After death, the live
+The small cover learner replays up to **512 of its own experienced transitions**.
+There is no action teacher, shelter blueprint, route planner or hidden safe-site input. After death, the live
 habitat can automatically start a fresh body while retaining the learned brain.
 
 **It still starts with the v0.2 learned food-seeking values**, obtained from ten
@@ -24,7 +25,7 @@ Use `--untrained` in a new data directory to watch learning from zero. Controlle
 tests freeze all weights and disable progress rewards in unfamiliar worlds;
 [validation](docs/VALIDATION.md) records results and limits.
 
-## Upgrading from v0.1, v0.2, or v0.3
+## Upgrading from v0.1–v0.4
 
 Run this in your Ubuntu / VS Code SSH terminal:
 
@@ -37,12 +38,18 @@ systemctl --user start neuroplex
 ```
 
 If running in the foreground, use Ctrl+C before updating, then `bash start.sh`.
-Refresh the browser (Ctrl+F5). **The live habitat expands once: 1.5× each dimension,
+Refresh the browser (Ctrl+F5). **Upgrading from v0.4 keeps the existing habitat,
+block positions, age, needs, pause/freeze settings and all learned values.**
+The original is archived as `data/checkpoint.v4.npz`. New sensor memory, feature
+weights and a Rest action start without shelter training. Pending action credit
+resets for the new observation/action schema; learned memories are retained.
+
+**For v0.1–v0.3 only, the live habitat expands once: 1.5× each dimension,
 25% fewer food patches, one-third fewer water sources, and at least 45-second food
 regrowth.** The standard 96×60 world becomes 144×90. Coordinates scale proportionally;
 the creature keeps its age, energy, hydration, health, learned values, recurrent
 weights and pause/freeze settings. New materials are added. Old checkpoints are
-archived as `data/checkpoint.v1.npz`, `.v2.npz`, or `.v3.npz` before writing format 4.
+archived as `data/checkpoint.v1.npz`, `.v2.npz`, or `.v3.npz` before writing format 5.
 Old sensory/action credit traces restart because the geometry changed. Existing
 v3 worlds keep their habitat stage; v1/v2 start at the gentle food stage.
 This expansion does not repeat on later restarts. **Auto-start next life is on by
@@ -61,6 +68,9 @@ Git may ask you to commit or stash the edit before pulling. Keep your changes.
 | --- | --- |
 | Larger, scarcer habitat | 144×90 by default; 48 food patches, 8 water sources, 45-second regrowth; stage modifiers make resources scarcer still |
 | Building materials | 24 pushable solid blocks from stage 2; blocks stop bodies and sight lines; learned building goal and rewards for improved cover with exits |
+| Cover learning | Separate fixed/movable surface inputs, shared geometry features and replay of 512 own experiences; no supplied actions |
+| Remembering and using cover | Remembers a visited cover site for up to 180 simulated seconds, corrects it on return, and learns a Use cover goal; Rest is a learned action |
+| Shelter practice | Random loose materials, then threats, on a copy; separate frozen tests in new practice layouts and full habitats; manual adoption |
 | Escape decisions | Earlier 360° obstacle sensing, joint wall/corner/threat states, reduced near-danger exploration and a margin before switching goals |
 | Escape practice | Bounded wall/corner drills on a copy, independent frozen audit and optional selective adoption after death |
 | Automatic next life | On by default; 10 real seconds after death, adjustable 1–300; keeps learned synapses, skill/goal values, difficulty, and lifetime records |
@@ -108,7 +118,7 @@ pass through each other, leave the map, or bury food/water. Predators cannot pus
 them, see through them or attack through them. A wall/corner made of blocks can
 therefore provide real cover. The creature still needs a way out to forage and drink.
 
-The new **Build cover** goal learns motor choices using material bearings, another
+The **Build cover** goal learns motor choices using material bearings, another
 visible block's relative direction, contact and local cover. Approaching a block
 transfers food-navigation experience; no layout, U-shaped shelter, or correct push
 sequence is programmed. An explicit geometric reward measures added cover from
@@ -116,11 +126,34 @@ multiple blocks with room to exit. It rewards new improvements per material; mer
 touching blocks or repeatedly restoring the same arrangement does not earn more.
 The dashboard distinguishes distance pushed from **building reward actually earned**.
 
-**This is a shelter-building foundation, not a reliable architect.** A short test
-showed pushing and improvements to the cover score, not a finished learned house.
-There are no roofs, doors, object grasping, long-term site memory or construction
-plans yet. Blocks and their arrangement survive service restarts. As before, a
+The **Use cover** goal gets a fading, body-relative memory of cover the creature
+has actually occupied. It cannot discover a distant shelter through walls. The
+learner can choose to return, leave, or rest; none of those actions is forced.
+A six-second memory of an observed threat prevents immediate forgetting behind a
+block. It estimates the last observed location, never a hidden predator's movements.
+Safety shaping uses only recent threat observations, local cover, and current needs,
+as a discounted potential difference; there is no recurring payment for camping.
+
+**Reliable multi-step shelter planning is still unproven.** There are no roofs,
+doors, object grasping, permanent home memory or construction plans.
+Blocks and their arrangement survive service restarts. As before, a
 new life creates a fresh world, so it does not inherit the previous life's buildings.
+
+To practice building and using cover:
+
+1. Leave **Learning on** and **Sensory memory** enabled. Building works from **2 · Scarce food** onward.
+2. Under **Evaluation & evolution**, choose **Shelter practice · blocks & cover**.
+   Start with **40 episodes × 30 seconds** and **5 evaluation worlds**.
+3. Compare construction reward, protected seconds, damage and food intake. The
+   dashboard also shows transfer to the normal full-size scarce habitat; a copy
+   that improves a practice score can still be worse at survival. Our short v0.5
+   check increased protected time in dense layouts but reduced building reward
+   and full-habitat food intake; do not assume practice is an automatic upgrade.
+4. Adoption is optional and only after death. Turn off automatic lives or pause
+   the death countdown, then **Start next life with trained candidate** if useful.
+   This imports building/use-cover motor learning and changed manager entries;
+   live food/water/escape motor learning and synapses are retained. The previous
+   checkpoint is archived. No trained shelter policy is bundled or auto-installed.
 
 To work on cornering and hesitation:
 
@@ -137,9 +170,10 @@ To work on cornering and hesitation:
 
 Practice supplies challenging scenarios, not teacher actions. More detailed wall
 states, reward shaping and reduced random exploration help learning, but the policy
-can still make bad decisions. In one five-world check, 40 practice episodes reduced
+can still make bad decisions. In the earlier v0.4 five-world check, 40 practice episodes reduced
 mean damage from **27 to 15**. That is limited evidence, not a survival guarantee.
-[Design and limits](docs/SHELTERS.md) and [validation](docs/VALIDATION-v0.4.md) give details.
+[Current learning design](docs/COVER-LEARNING.md) and [v0.5 validation](docs/VALIDATION-v0.5.md)
+give details; [SHELTERS.md](docs/SHELTERS.md) describes the underlying v0.4 physics.
 
 ## Automatic lives and smooth viewing
 
@@ -269,7 +303,7 @@ linger, reconnect if necessary. To uninstall the service, stop/disable it with
   new learning updates, exploration rate, TD prediction error, and reward components.
 
 Eating within mouth reach is an automatic body reflex, not a learned fifth motor
-command. The motor policy chooses among six body intents; the four neural motor
+command. The motor policy chooses among seven body intents (including Rest); the four neural motor
 populations produce forward/backward movement and left/right turning. Eating gets
 a reward; time, wall contact, and death incur penalties. **Potential-based progress
 feedback** rewards getting closer to and facing visible food. This is explicit
@@ -346,7 +380,7 @@ worlds can seek food immediately and continue adapting.
 
 `data/checkpoint.npz` contains weights, voltages, spike state, eligibility and spike
 traces, thresholds, all four RNG states, motor and goal values and eligibility, the held
-action and accumulated return, sensory memory, resources, predators, blocks and construction credit, creature, settings, metrics, and
+action and accumulated return, sensory/site memory, the cover replay buffer, resources, predators, blocks and construction credit, creature, settings, metrics, and
 events. It is a numeric NumPy archive with JSON
 metadata, loaded with `allow_pickle=False`. The previous save is kept as
 `data/checkpoint.previous.npz`. Both are local to your OptiPlex and ignored by Git.
@@ -383,7 +417,7 @@ cd ~/neuroplex
 The Python suite includes automatic-life timing/persistence and streaming checks.
 Optional browser-interpolation unit tests need Node.js only on your development
 machine: `node --test tests/test_motion.cjs` (no npm dependencies). Node.js is not
-needed to run Neuroplex. [v0.4 validation](docs/VALIDATION-v0.4.md) describes the
+needed to run Neuroplex. [v0.5 validation](docs/VALIDATION-v0.5.md) describes the
 live-browser checks and remaining performance limits.
 
 Reproduce the bounded escape-practice and larger-world smoke check without touching

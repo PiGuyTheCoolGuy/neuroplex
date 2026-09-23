@@ -7,6 +7,7 @@ import numpy as np
 from .config import Config
 from .curriculum import STAGES
 from .geometry import circle_overlaps, cover_at, occluded, ray_hits
+from .cover import SENSES
 
 
 class World:
@@ -209,7 +210,7 @@ class World:
         self._project(self.active_blocks, self.block_retina, self.vision_range, c.vision_fov, materials=True)
         self.cover = float(cover_at([[self.x, self.y]], self.active_blocks, c.block_size / 2,
                                     c.creature_radius, c.world_width, c.world_height)[0])
-        senses = np.zeros(181, dtype=np.float32)
+        senses = np.zeros(SENSES, dtype=np.float32)
         senses[:32] = self.retina
         senses[32:48] = self.hunger
         senses[48:64] = self.thirst
@@ -224,6 +225,14 @@ class World:
         senses[178] = self.cover
         senses[179] = self.pushed
         senses[180] = bool(len(self.active_blocks))
+        # Typed short-range rays: report the first visible surface, not walls
+        # behind a block or a block behind the nearer world boundary.
+        fixed = boundary.min(axis=1) - c.creature_radius
+        material = (ray_hits(np.repeat([[self.x, self.y]], 16, axis=0), rays,
+                            self.active_blocks, c.block_size / 2 + c.creature_radius).min(axis=1)
+                    if len(self.active_blocks) else np.full(16, np.inf))
+        senses[181:197] = np.where(fixed <= material, np.clip(1 - fixed / c.obstacle_range, 0, 1), 0)
+        senses[197:213] = np.where(material < fixed, np.clip(1 - material / c.obstacle_range, 0, 1), 0)
         return senses
 
     def _body_move(self, position, delta, radius):
@@ -384,6 +393,7 @@ class World:
 
     def summary(self):
         c = self.config
+        senses = self.sense()
         return {
             **self.render_state(),
             "energy": self.energy, "max_energy": c.max_energy, "hunger": self.hunger,
@@ -397,6 +407,7 @@ class World:
             "turn": self.turn, "touch": self.touch,
             "retina": self.retina.tolist(),
             "block_retina": self.block_retina.tolist(), "obstacle_retina": self.obstacle_retina.tolist(),
+            "fixed_retina": senses[181:197].tolist(), "material_retina": senses[197:213].tolist(),
             "cover": self.cover, "push_distance": self.push_distance, "protected_seconds": self.protected_seconds,
             "construction_reward_total": self.construction_reward_total,
         }

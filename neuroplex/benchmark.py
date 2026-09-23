@@ -29,7 +29,7 @@ def train(seed: int, seconds: float, food_count: int = 32, report_progress: bool
         "alive": sim.world.alive,
         "method": "online TD motor policy; complete LIF simulation; no teacher or resets",
     }
-    artifact = {"format": 1, "training": metadata,
+    artifact = {"format": 2, "training": metadata,
                 "values": sim.brain.policy.values[:153].tolist(), "visits": sim.brain.policy.visits[:153].tolist()}
     return artifact, {"type": "training", **metadata, "wall_seconds": round(time.perf_counter() - started, 3)}
 
@@ -42,7 +42,9 @@ def evaluate(seed: int, seconds: float, values: np.ndarray | None, food_count: i
                             food_regrow_seconds=25, block_count=0))
     sim.brain.learning = False
     if values is not None:
-        sim.brain.policy.values[:153] = values
+        if values.shape not in ((153, 6), (153, 7)):
+            raise ValueError("Expected a six- or seven-action food policy")
+        sim.brain.policy.values[:153, :values.shape[1]] = values
     initial_values = sim.brain.policy.values.copy()
     initial_weights = sim.brain.weights.copy()
     started = time.perf_counter()

@@ -1,6 +1,7 @@
 """Sparse recurrent LIF neurons with three-factor, reward-modulated STDP.
 
-No autodiff, backpropagation, batches, replay buffer, or target action labels.
+No autodiff, backpropagation, batches, or target action labels. The separate
+action-value learner replays a small buffer of the creature's own transitions.
 This is a deliberately small research sandbox, not a validated biological model.
 """
 
@@ -68,6 +69,8 @@ class Brain:
         if len(senses) >= 181:
             drive[144:176] += 1.2 * senses[146:178]
             drive[176:184] += float(senses[178])
+        if len(senses) >= 248:
+            drive[184:248] += 1.2 * senses[181:245]
         for i, (_, a, b) in enumerate(GROUPS[-4:]):
             drive[a:b] = self.motor_current[i]
         recurrent = np.bincount(

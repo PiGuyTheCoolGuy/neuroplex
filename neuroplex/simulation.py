@@ -17,10 +17,12 @@ from .world import World
 from .policy import MotorPolicy
 from .memory import SensoryMemory
 from .curriculum import STAGES, ready_to_advance
+from .cover import CoverLearner, CAPACITY
+from .policy import COVER_START, GOAL_STATES
 
 
 class Simulation:
-    FORMAT_VERSION = 4
+    FORMAT_VERSION = 5
 
     def __init__(self, config: Config | None = None):
         self.config = config or Config()
@@ -132,7 +134,7 @@ class Simulation:
         self.config = replace(self.config, memory_enabled=enabled)
         self.brain.config = self.brain.policy.config = self.memory.config = self.config
         self.world.config = replace(self.world.config, memory_enabled=enabled)
-        self.memory.traces.fill(0)
+        self.memory.clear()
         self.brain.policy.reset_activity()
 
     def expand_habitat(self):
@@ -154,7 +156,7 @@ class Simulation:
                            food_regrow_seconds=new.food_regrow_seconds)
         self.config = new
         self.brain.config = self.brain.policy.config = self.memory.config = new
-        self.memory.traces.fill(0)
+        self.memory.clear()
         self.brain.policy.reset_activity()
         w.place_blocks()
         w.sense()
@@ -167,7 +169,7 @@ class Simulation:
         new_config = replace(self.config, seed=self.config.seed + self.life - 1, habitat_stage=self.world.stage)
         self.world = World(new_config)
         self.stage_started = 0.0
-        self.memory.traces.fill(0)
+        self.memory.clear()
         self.brain.reset_activity()
         self.brain.last_reward = 0
         self.paused = False
@@ -214,6 +216,9 @@ class Simulation:
             "ecology_rng": self.world.ecology_rng.bit_generator.state,
             "brain_rng": self.brain.rng.bit_generator.state,
             "policy_rng": self.brain.policy.rng.bit_generator.state,
+            "cover_learner": {"rng": self.brain.policy.cover_learner.rng.bit_generator.state,
+                              "cursor": self.brain.policy.cover_learner.cursor,
+                              "count": self.brain.policy.cover_learner.count},
             "policy": {key: getattr(self.brain.policy, key) for key in MotorPolicy.STATE_NAMES},
             "brain": {k: getattr(self.brain, k) for k in
                       ("learning", "last_reward", "total_abs_change", "steps")},
@@ -231,7 +236,9 @@ class Simulation:
         arrays = {"brain_" + k: getattr(self.brain, k) for k in Brain.ARRAY_NAMES}
         arrays.update({"policy_" + k: getattr(self.brain.policy, k) for k in MotorPolicy.ARRAY_NAMES})
         arrays.update({"world_" + k: getattr(self.world, k) for k in World.ARRAY_NAMES})
-        arrays.update(memory_traces=self.memory.traces, metadata=np.array(json.dumps(metadata, allow_nan=False)))
+        arrays.update({"cover_" + k: getattr(self.brain.policy.cover_learner, k) for k in CoverLearner.ARRAY_NAMES})
+        arrays.update(memory_traces=self.memory.traces, memory_sites=self.memory.sites,
+                      metadata=np.array(json.dumps(metadata, allow_nan=False)))
         temp = path.with_suffix(".tmp")
         try:
             with temp.open("wb") as handle:
@@ -259,7 +266,7 @@ class Simulation:
             with np.load(path, allow_pickle=False) as archive:
                 metadata = json.loads(str(archive["metadata"]))
                 version = metadata["version"]
-                if version not in (1, 2, 3, cls.FORMAT_VERSION):
+                if version not in (1, 2, 3, 4, cls.FORMAT_VERSION):
                     raise ValueError("unsupported checkpoint version")
                 config = metadata["config"]
                 if version == 1:
@@ -282,29 +289,44 @@ class Simulation:
                         value = archive["policy_" + name]
                         expected = getattr(sim.brain.policy, name)
                         if version == 2:
-                            expected = expected[:153]
+                            expected = expected[:153, :6]
                         elif version == 3:
                             if name in ("values", "visits", "eligibility"):
-                                expected = expected[:459]
+                                expected = expected[:459, :6]
                             elif name in ("goal_values", "goal_visits", "goal_eligibility"):
-                                expected = expected[:, :3]
+                                expected = expected[:108, :3]
                             else:
                                 expected = expected[:3]
+                        elif version == 4:
+                            if name in ("values", "visits", "eligibility"):
+                                expected = expected[:COVER_START, :6]
+                            elif name in ("goal_values", "goal_visits", "goal_eligibility"):
+                                expected = expected[:108, :4]
+                            else:
+                                expected = expected[:4]
                         if (value.shape != expected.shape or value.dtype != expected.dtype
                                 or not np.isfinite(value).all()):
                             raise ValueError(f"invalid motor policy array: {name}")
                         if version == 2:
-                            getattr(sim.brain.policy, name)[:153] = value
+                            getattr(sim.brain.policy, name)[:153, :6] = value
                             if name == "values":
-                                sim.brain.policy.values[153:306] = value
+                                sim.brain.policy.values[153:306, :6] = value
                         elif version == 3:
                             target = getattr(sim.brain.policy, name)
                             if name in ("values", "visits", "eligibility"):
-                                target[:459] = value
+                                target[:459, :6] = value
                             elif name in ("goal_values", "goal_visits", "goal_eligibility"):
-                                target[:, :3] = value
+                                target[:108, :3] = value
                             else:
                                 target[:3] = value
+                        elif version == 4:
+                            target = getattr(sim.brain.policy, name)
+                            if name in ("values", "visits", "eligibility"):
+                                target[:COVER_START, :6] = value
+                            elif name in ("goal_values", "goal_visits", "goal_eligibility"):
+                                target[:108, :4] = value
+                            else:
+                                target[:4] = value
                         else:
                             setattr(sim.brain.policy, name, value.copy())
                     required = set(MotorPolicy.STATE_NAMES)
@@ -319,8 +341,8 @@ class Simulation:
                     sim.brain.policy.rng.bit_generator.state = metadata["policy_rng"]
                     if version == 2:
                         sim.brain.policy.skill_updates[0] = sim.brain.policy.updates
-                    if (not 0 <= sim.brain.policy.state < len(sim.brain.policy.values) or not 0 <= sim.brain.policy.action < 6
-                            or not 0 <= sim.brain.policy.goal < 4 or not 0 <= sim.brain.policy.goal_state < 108):
+                    if (not 0 <= sim.brain.policy.state < len(sim.brain.policy.values) or not 0 <= sim.brain.policy.action < 7
+                            or not 0 <= sim.brain.policy.goal < 5 or not 0 <= sim.brain.policy.goal_state < GOAL_STATES):
                         raise ValueError("invalid policy state or action")
                 else:
                     # Preserve the recurrent memories. The new motor interface
@@ -350,7 +372,31 @@ class Simulation:
                     sim.memory.traces[:] = traces
                     sim.metrics = deque(metadata["metrics"], maxlen=4320)
                     sim.life_records = deque(metadata["life_records"], maxlen=256)
-                else:
+                if version >= 5:
+                    sites = archive["memory_sites"]
+                    if sites.shape != (2, 5) or not np.isfinite(sites).all():
+                        raise ValueError("invalid cover memory")
+                    sim.memory.sites[:] = sites
+                    learner = sim.brain.policy.cover_learner
+                    for name in CoverLearner.ARRAY_NAMES:
+                        value = archive["cover_" + name]
+                        expected = getattr(learner, name)
+                        if value.shape != expected.shape or value.dtype != expected.dtype or not np.isfinite(value).all():
+                            raise ValueError(f"invalid cover learner array: {name}")
+                        setattr(learner, name, value.copy())
+                    state = metadata["cover_learner"]
+                    if (type(state["cursor"]) is not int or not 0 <= state["cursor"] < CAPACITY
+                            or type(state["count"]) is not int or not 0 <= state["count"] <= CAPACITY):
+                        raise ValueError("invalid cover replay bounds")
+                    learner.cursor, learner.count = state["cursor"], state["count"]
+                    info = learner.replay_info[:learner.count]
+                    if (np.any(info[:, :4] != np.floor(info[:, :4])) or np.any((info[:, 0] < 2) | (info[:, 0] > 4))
+                            or np.any((info[:, 1] < 0) | (info[:, 1] >= 7))
+                            or np.any((info[:, 2:4] < 0) | (info[:, 2:4] >= len(sim.brain.policy.values)))
+                            or np.any((info[:, 5:] < 0) | (info[:, 5:] > 1))):
+                        raise ValueError("invalid cover replay transition")
+                    learner.rng.bit_generator.state = state["rng"]
+                elif version < 3:
                     sim.world.death_code = 0 if sim.world.alive else 1
                     sim.stage_started = sim.world.time
                     sim.elapsed = sim.world.time
@@ -376,12 +422,15 @@ class Simulation:
                     sim.total_reward = 0.0
                     sim.brain.last_reward = 0.0
                 if version < cls.FORMAT_VERSION:
-                    sim.brain.policy.initialize_new_skills()
+                    if version < 4:
+                        sim.brain.policy.initialize_new_skills()
+                        sim.world.place_blocks()
+                    else:
+                        sim.brain.policy.initialize_cover_skill()
                     sim.brain.policy.reset_activity()
-                    sim.world.place_blocks()
                     sim.world.sense()
                     sim.migrated_from = version
-                    sim.event(f"Upgraded v{version} save: preserved learned values; added obstacle-aware escape and construction.")
+                    sim.event(f"Upgraded v{version} save: preserved learned values; added cover memory and experience learning.")
                 return sim
         except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile) as exc:
             raise ValueError(f"Cannot load checkpoint {path}: {exc}. The file was not overwritten.") from exc

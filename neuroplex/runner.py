@@ -44,7 +44,8 @@ class Runner:
                         destination.flush()
                         os.fsync(destination.fileno())
                     os.replace(temporary, backup)
-                self.sim.expand_habitat()
+                if self.sim.migrated_from < 4:
+                    self.sim.expand_habitat()
                 self.sim.save(self.checkpoint)
                 log.info("Migrated checkpoint; original retained at %s", backup)
             self.lab = Laboratory(self.directory)
@@ -218,7 +219,7 @@ class Runner:
             raise ValueError("A champion can start a new life only after the current creature has died")
         champion_path = self.lab.champion()
         champion = Simulation.load(champion_path)
-        practice = champion.brain.policy.source.startswith("escape-practice:")
+        practice = champion.brain.policy.source.startswith(("escape-practice:", "shelter-practice:"))
         baseline = Simulation.load(champion_path.with_name("source.npz")) if practice else None
         self.sim.save(self.directory / f"checkpoint.before-evolution-life-{self.sim.life}.npz")
         self.sim.new_life()
@@ -228,15 +229,22 @@ class Runner:
             # today's food, water, construction, or recurrent synaptic learning.
             import numpy as np
             current, trained, original = self.sim.brain.policy, champion.brain.policy, baseline.brain.policy
-            section = slice(ESCAPE_START, BUILD_START)
+            shelter = trained.source.startswith("shelter-practice:")
+            section = slice(BUILD_START, None) if shelter else slice(ESCAPE_START, BUILD_START)
             current.values[section] = trained.values[section]
             current.visits[section] += np.maximum(0, trained.visits[section] - original.visits[section])
             changed = trained.goal_values != original.goal_values
-            changed[:, 3] = False
+            changed[:, [2] if shelter else [3, 4]] = False
             current.goal_values[changed] = trained.goal_values[changed]
             current.goal_visits += np.maximum(0, trained.goal_visits - original.goal_visits)
-            additional = int(trained.skill_updates[2] - original.skill_updates[2])
-            current.skill_updates[2] += additional
+            skills = slice(3, 5) if shelter else slice(2, 3)
+            deltas = np.maximum(0, trained.skill_updates[skills] - original.skill_updates[skills])
+            additional = int(deltas.sum())
+            current.skill_updates[skills] += deltas
+            residual = slice(1, 3) if shelter else slice(0, 1)
+            current.cover_learner.weights[residual] = trained.cover_learner.weights[residual]
+            current.cover_learner.updates[residual] += np.maximum(0, trained.cover_learner.updates[residual] - original.cover_learner.updates[residual])
+            current.cover_learner.clear_replay()
             current.updates += additional
             current.goal_updates += trained.goal_updates - original.goal_updates
             current.source = trained.source

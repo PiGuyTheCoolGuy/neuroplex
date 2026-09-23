@@ -1,7 +1,7 @@
 # Learning validation
 
 Current block physics, escape practice, migration and browser checks are in
-[VALIDATION-v0.4.md](VALIDATION-v0.4.md). Older habitat measurements below use older
+[VALIDATION-v0.5.md](VALIDATION-v0.5.md). Older habitat measurements below use older
 geometry/resource defaults and are not directly comparable to the expanded world.
 
 Automatic-life and streaming verification is in [VALIDATION-v0.3.1.md](VALIDATION-v0.3.1.md).
